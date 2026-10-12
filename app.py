@@ -110,7 +110,6 @@ with col1:
             all_1h, all_5m = [], []
             for symbol in symbols:
                 try:
-                    # Spot & Futures (1 Hour)
                     ohlcv_1h = exchange.fetch_ohlcv(symbol, '1h', limit=50)
                     h_1h = np.array([c[2] for c in ohlcv_1h]); l_1h = np.array([c[3] for c in ohlcv_1h]); c_1h = np.array([c[4] for c in ohlcv_1h]); v_1h = np.array([c[5] for c in ohlcv_1h])
                     r_1h = calculate_rsi(c_1h); m_1h, s_1h = calculate_macd(c_1h); vwap_1h = calculate_vwap(h_1h[-20:], l_1h[-20:], c_1h[-20:], v_1h[-20:]); curr = c_1h[-1]
@@ -119,7 +118,6 @@ with col1:
                     ss = 40 + (15 if not btc_bullish else 0) + (15 if curr < vwap_1h else 0) + (15 if m_1h < s_1h else 0) + (15 if 30 < r_1h < 60 else 0)
                     all_1h.append({'symbol': symbol, 'price': curr, 'score_l': sl, 'score_s': ss})
                     
-                    # Scalping (5 Minutes) - باستخدام الأدوات الجديدة
                     ohlcv_5m = exchange.fetch_ohlcv(symbol, '5m', limit=50)
                     h_5m = np.array([c[2] for c in ohlcv_5m]); l_5m = np.array([c[3] for c in ohlcv_5m]); c_5m = np.array([c[4] for c in ohlcv_5m]); v_5m = np.array([c[5] for c in ohlcv_5m])
                     curr_5m = c_5m[-1]
@@ -129,16 +127,11 @@ with col1:
                     ema21 = calculate_ema(c_5m, 21)
                     atr = calculate_atr(h_5m, l_5m, c_5m, 14)
                     
-                    # قوة الدخول بناءً على تقاطع الزخم
                     sl_5m = 40 + (30 if curr_5m > vwap_5m else 0) + (20 if ema9 > ema21 else 0) + (10 if v_5m[-1] > np.mean(v_5m[-10:]) else 0)
                     ss_5m = 40 + (30 if curr_5m < vwap_5m else 0) + (20 if ema9 < ema21 else 0) + (10 if v_5m[-1] > np.mean(v_5m[-10:]) else 0)
                     
-                    # حسابات ديناميكية للهدف والوقف باستخدام ATR
-                    # الشراء: الوقف تحت السعر بـ 1.5 ATR (مساحة تنفس)، والهدف 2.5 ATR
                     buy_sl = curr_5m - (1.5 * atr)
                     buy_tp = curr_5m + (2.5 * atr)
-                    
-                    # البيع: الوقف فوق السعر بـ 1.5 ATR، والهدف تحت السعر بـ 2.5 ATR
                     sell_sl = curr_5m + (1.5 * atr)
                     sell_tp = curr_5m - (2.5 * atr)
                     
@@ -154,7 +147,6 @@ with col1:
                 fs = [{'symbol': i['symbol'], 'direction': '🔴 SHORT', 'price': i['price'], 'score': i['score_s'], 'buy': round(i['price']*1.002,4), 'tp': round(i['price']*0.975,4), 'sl': round(i['price']*1.02,4), 'leverage': '5x'} for i in sorted(all_1h, key=lambda x: x['score_s'], reverse=True)[:2]]
                 st.session_state.futures_opps = sorted(fl + fs, key=lambda x: x['score'], reverse=True)
                 
-                # تطبيق الأهداف والوقوف الديناميكية في السكالبينج
                 scl = [{'symbol': i['symbol'], 'direction': '🟢 LONG ATR', 'price': i['price'], 'score': i['score_l'], 'buy': round(i['price'],4), 'tp': round(i['buy_tp'],4), 'sl': round(i['buy_sl'],4), 'leverage': '20x'} for i in sorted(all_5m, key=lambda x: x['score_l'], reverse=True)[:3]]
                 scs = [{'symbol': i['symbol'], 'direction': '🔴 SHORT ATR', 'price': i['price'], 'score': i['score_s'], 'buy': round(i['price'],4), 'tp': round(i['sell_tp'],4), 'sl': round(i['sell_sl'],4), 'leverage': '20x'} for i in sorted(all_5m, key=lambda x: x['score_s'], reverse=True)[:2]]
                 st.session_state.scalping_opps = sorted(scl + scs, key=lambda x: x['score'], reverse=True)
@@ -181,6 +173,17 @@ with col2:
                     except: pass
             save_portfolio(st.session_state.tracked_trades)
         st.success("تم التحديث!")
+        
+    st.markdown("---")
+    if st.button('🧹 مسح الصفقات المغلقة'):
+        st.session_state.tracked_trades = [t for t in st.session_state.tracked_trades if t['status'] not in ['🎯 ربح (Hit TP)', '🛑 خسارة (Hit SL)']]
+        save_portfolio(st.session_state.tracked_trades)
+        st.success("تم تنظيف المحفظة! (اضغطي تحديث للرؤية)")
+        
+    if st.button('🧨 تصفير المحفظة بالكامل'):
+        st.session_state.tracked_trades = []
+        save_portfolio([])
+        st.success("تم مسح كل الصفقات! (اضغطي تحديث للرؤية)")
 
 tab1, tab2, tab3, tab4 = st.tabs(["📊 Spot", "⚡ Futures", "⏱️ Scalping (ATR)", "💼 محفظتي (دائمة)"])
 
