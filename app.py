@@ -7,7 +7,7 @@ import json
 import os
 
 st.set_page_config(page_title="Glow Pro Bot", page_icon="📈", layout="wide")
-st.title("📈 تطبيق التوصيات الاحترافي (النسخة السحابية الدائمة)")
+st.title("📈 تطبيق التوصيات الاحترافي (نسخة القناص اللحظي)")
 
 API_KEY = "41e8e6d1-3d2d-4861-b0df-61ccdb79e34b"
 SECRET_KEY = "1FC2FDF62E1F188458144B7700759BC3" 
@@ -19,7 +19,6 @@ def get_exchange():
 
 exchange = get_exchange()
 
-# دوال الحفظ الدائم للمحفظة
 def load_portfolio():
     if os.path.exists("portfolio.json"):
         try:
@@ -35,7 +34,6 @@ if 'futures_opps' not in st.session_state: st.session_state.futures_opps = []
 if 'scalping_opps' not in st.session_state: st.session_state.scalping_opps = []
 if 'tracked_trades' not in st.session_state: st.session_state.tracked_trades = load_portfolio()
 
-# --- أدوات التحليل الفني ---
 def calculate_rsi(prices, period=14):
     deltas = np.diff(prices)
     seed = deltas[:period+1]
@@ -84,22 +82,17 @@ def calculate_adx(highs, lows, closes, period=14):
         highs_s = pd.Series(highs)
         lows_s = pd.Series(lows)
         closes_s = pd.Series(closes)
-        
         up_move = highs_s - highs_s.shift(1)
         down_move = lows_s.shift(1) - lows_s
-        
         plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
         minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
-        
         tr1 = highs_s - lows_s
         tr2 = abs(highs_s - closes_s.shift(1))
         tr3 = abs(lows_s - closes_s.shift(1))
         tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        
         tr_roll = tr.ewm(alpha=1/period, adjust=False).mean()
         plus_di = 100 * (pd.Series(plus_dm).ewm(alpha=1/period, adjust=False).mean() / tr_roll)
         minus_di = 100 * (pd.Series(minus_dm).ewm(alpha=1/period, adjust=False).mean() / tr_roll)
-        
         dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
         adx = dx.ewm(alpha=1/period, adjust=False).mean().iloc[-1]
         return adx if not np.isnan(adx) else 25
@@ -111,7 +104,6 @@ def track_trade(opp, trade_type):
         if t['symbol'] == opp['symbol'] and t['status'] in ['⏳ معلقة', '🟢 نشطة']:
             st.toast(f"الصفقة موجودة بالفعل!")
             return
-            
     new_trade = {
         'id': f"{opp['symbol']}_{time.time()}", 'symbol': opp['symbol'], 'type': trade_type,
         'direction': opp.get('direction', '🟢 LONG'), 'entry': opp['buy'], 'tp': opp['tp'],
@@ -124,7 +116,7 @@ def track_trade(opp, trade_type):
 col1, col2 = st.columns([3, 1])
 with col1:
     if st.button('🔍 فحص السوق بأدوات السكالبينج السريعة'):
-        with st.spinner('جاري قنص الصفقات على فريم الدقيقة 1m والـ 5m...'):
+        with st.spinner('جاري قنص الصفقات اللحظية على فريم الدقيقة...'):
             symbols = ['XRP/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT', 'ADA/USDT', 'AVAX/USDT', 'LINK/USDT', 'DOT/USDT', 'NEAR/USDT', 'BNB/USDT', 'MATIC/USDT', 'LTC/USDT']
             
             btc_bullish = True
@@ -136,7 +128,7 @@ with col1:
             all_1h, all_5m = [], []
             for symbol in symbols:
                 try:
-                    # فريم الساعة (للاتجاه العام)
+                    # ====== فريم الساعة (للاتجاه العام) ======
                     ohlcv_1h = exchange.fetch_ohlcv(symbol, '1h', limit=50)
                     h_1h = np.array([c[2] for c in ohlcv_1h]); l_1h = np.array([c[3] for c in ohlcv_1h]); c_1h = np.array([c[4] for c in ohlcv_1h]); v_1h = np.array([c[5] for c in ohlcv_1h])
                     r_1h = calculate_rsi(c_1h); m_1h, s_1h = calculate_macd(c_1h); vwap_1h = calculate_vwap(h_1h[-20:], l_1h[-20:], c_1h[-20:], v_1h[-20:]); curr = c_1h[-1]
@@ -146,38 +138,46 @@ with col1:
                     ss = 40 + (15 if not btc_bullish else 0) + (15 if curr < vwap_1h else 0) + (15 if m_1h < s_1h else 0) + (15 if 30 < r_1h < 60 else 0)
                     all_1h.append({'symbol': symbol, 'price': curr, 'score_l': sl, 'score_s': ss})
                     
-                    # فريم 5 دقائق (للسيولة والـ ADX والـ ATR)
+                    # ====== فريم 5 دقائق (لحساب الهدف والوقف ATR فقط) ======
                     ohlcv_5m = exchange.fetch_ohlcv(symbol, '5m', limit=50)
-                    h_5m = np.array([c[2] for c in ohlcv_5m]); l_5m = np.array([c[3] for c in ohlcv_5m]); c_5m = np.array([c[4] for c in ohlcv_5m]); v_5m = np.array([c[5] for c in ohlcv_5m])
+                    h_5m = np.array([c[2] for c in ohlcv_5m]); l_5m = np.array([c[3] for c in ohlcv_5m]); c_5m = np.array([c[4] for c in ohlcv_5m])
                     curr_5m = c_5m[-1]
-                    
-                    vwap_5m = calculate_vwap(h_5m[-20:], l_5m[-20:], c_5m[-20:], v_5m[-20:])
                     atr = calculate_atr(h_5m, l_5m, c_5m, 14)
-                    vol_sma20 = np.mean(v_5m[-20:])
-                    adx_val = calculate_adx(h_5m, l_5m, c_5m, 14)
                     
-                    # فريم الدقيقة 1m (لزناد الدخول السريع جداً)
+                    # ====== فريم الدقيقة 1m (الزناد اللحظي والسيولة) ======
                     ohlcv_1m = exchange.fetch_ohlcv(symbol, '1m', limit=30)
                     c_1m = np.array([c[4] for c in ohlcv_1m])
-                    ema5_1m = calculate_ema(c_1m, 5)   # متوسط سريع جداً
-                    ema13_1m = calculate_ema(c_1m, 13) # متوسط الإشارة السريع
+                    v_1m = np.array([c[5] for c in ohlcv_1m])
                     
-                    # التقييم المبدئي بناءً على زناد الـ 1 دقيقة
-                    sl_5m = 40 + (30 if curr_5m > vwap_5m else 0) + (20 if ema5_1m > ema13_1m else 0) + (10 if v_5m[-1] > np.mean(v_5m[-10:]) else 0)
-                    ss_5m = 40 + (30 if curr_5m < vwap_5m else 0) + (20 if ema5_1m < ema13_1m else 0) + (10 if v_5m[-1] > np.mean(v_5m[-10:]) else 0)
+                    ema5_1m = calculate_ema(c_1m, 5)
+                    ema13_1m = calculate_ema(c_1m, 13)
+                    ema5_1m_prev = calculate_ema(c_1m[:-1], 5)
+                    ema13_1m_prev = calculate_ema(c_1m[:-1], 13)
                     
-                    # الفلاتر الصارمة
-                    if curr_5m < ema20_1h: sl_5m -= 30
-                    if v_5m[-1] < vol_sma20: sl_5m -= 20
-                    if adx_val < 25: sl_5m -= 20
+                    # 1. هل التقاطع طازج؟ (حصل في الشمعة دي بس)
+                    fresh_long = (ema5_1m_prev <= ema13_1m_prev) and (ema5_1m > ema13_1m)
+                    fresh_short = (ema5_1m_prev >= ema13_1m_prev) and (ema5_1m < ema13_1m)
+
+                    # 2. هل في سيولة لحظية دخلت؟ (فوليوم الشمعة الحالية أعلى من متوسط آخر 5 دقايق)
+                    vol_burst = v_1m[-1] > np.mean(v_1m[-6:-1])
+
+                    # 3. نظام النقاط السريع (مفيش ADX يعطلنا)
+                    # التقييم بيبدأ من 50 + 30 للتقاطع + 20 للسيولة = 100
+                    sl_5m = 50 + (30 if fresh_long else 0) + (20 if vol_burst else 0)
+                    ss_5m = 50 + (30 if fresh_short else 0) + (20 if vol_burst else 0)
                     
-                    if curr_5m > ema20_1h: ss_5m -= 30
-                    if v_5m[-1] < vol_sma20: ss_5m -= 20
-                    if adx_val < 25: ss_5m -= 20
+                    # الفلتر الوحيد اللي ميتنازلش عنه: الاتجاه العام للساعة
+                    if curr_5m < ema20_1h: sl_5m -= 50  # ممنوع الشراء عكس التريند
+                    if curr_5m > ema20_1h: ss_5m -= 50  # ممنوع البيع عكس التريند
+                    
+                    # لو التقاطع مش طازج، اقفل التقييم خالص
+                    if not fresh_long: sl_5m -= 50
+                    if not fresh_short: ss_5m -= 50
                     
                     sl_5m = max(0, sl_5m)
                     ss_5m = max(0, ss_5m)
                     
+                    # الأهداف محكومة بالـ ATR بتاع 5 دقايق عشان تدي مساحة تتنفس
                     buy_sl = curr_5m - (1.5 * atr)
                     buy_tp = curr_5m + (2.5 * atr)
                     sell_sl = curr_5m + (1.5 * atr)
@@ -208,7 +208,6 @@ with col2:
                         ticker = exchange.fetch_ticker(t['symbol'])
                         curr = ticker['last']
                         is_long = 'LONG' in t['direction'] or t['type'] == 'Spot'
-                        
                         if t['status'] == '⏳ معلقة':
                             if (is_long and curr <= t['entry']) or (not is_long and curr >= t['entry']): t['status'] = '🟢 نشطة'
                         if t['status'] == '🟢 نشطة':
@@ -226,12 +225,12 @@ with col2:
     if st.button('🧹 مسح الصفقات المغلقة'):
         st.session_state.tracked_trades = [t for t in st.session_state.tracked_trades if t['status'] not in ['🎯 ربح (Hit TP)', '🛑 خسارة (Hit SL)']]
         save_portfolio(st.session_state.tracked_trades)
-        st.success("تم تنظيف المحفظة! (اضغطي تحديث للرؤية)")
+        st.success("تم تنظيف المحفظة!")
         
     if st.button('🧨 تصفير المحفظة بالكامل'):
         st.session_state.tracked_trades = []
         save_portfolio([])
-        st.success("تم مسح كل الصفقات! (اضغطي تحديث للرؤية)")
+        st.success("تم مسح كل الصفقات!")
 
 tab1, tab2, tab3, tab4 = st.tabs(["📊 Spot", "⚡ Futures", "⏱️ Scalping (سريع)", "💼 محفظتي (دائمة)"])
 
@@ -244,7 +243,7 @@ with tab2:
         st.markdown(f"**{opp['symbol']}** {opp['direction']} ({opp['score']}/100 ⭐️) | الحالي: {opp['price']} | دخول: `{opp['buy']}` | هدف: `{opp['tp']}` | وقف: `{opp['sl']}`")
         if st.button(f"➕ تتبع", key=f"f_{i}_{opp['symbol']}"): track_trade(opp, 'Futures')
 with tab3:
-    st.info("⚡ تم تفعيل الدخول السريع بناءً على تقاطعات فريم الدقيقة (1m) مع فلاتر حماية الساعة والسيولة.")
+    st.info("⚡ تم إزالة الفلاتر البطيئة (ADX/SMA). البوت الآن يصطاد الانعكاس اللحظي فوراً (Fresh Crossover + Volume Burst) مع الالتزام باتجاه الساعة.")
     for i, opp in enumerate(st.session_state.scalping_opps, 1):
         st.markdown(f"**{opp['symbol']}** {opp['direction']} ({opp['score']}/100 ⭐️) | الحالي: {opp['price']} | دخول: `{opp['buy']}` | هدف: `{opp['tp']}` | وقف: `{opp['sl']}`")
         if st.button(f"➕ تتبع", key=f"sc_{i}_{opp['symbol']}"): track_trade(opp, 'Scalping')
@@ -259,4 +258,5 @@ with tab4:
             st.markdown(f"**{t['symbol']}** | {t['type']} | {t['direction']} | {status_icon} **{t['status']}**")
             st.markdown(f"دخول: {t['entry']} | هدف: {t['tp']} | وقف: {t['sl']}")
             st.markdown("---")
- 
+
+    
