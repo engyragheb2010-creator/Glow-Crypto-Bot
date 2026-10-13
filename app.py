@@ -6,8 +6,8 @@ import time
 import json
 import os
 
-st.set_page_config(page_title="Glow Pro RSI Bot", page_icon="📈", layout="wide")
-st.title("📈 تطبيق التوصيات الذكي (EMA + MACD + RSI)")
+st.set_page_config(page_title="Glow Pro Multi-Strategy Bot", page_icon="⚡", layout="wide")
+st.title("⚡ تطبيق التوصيات الذكي (السكالبينج + فلتر التريند العام)")
 
 API_KEY = "41e8e6d1-3d2d-4861-b0df-61ccdb79e34b"
 SECRET_KEY = "1FC2FDF62E1F188458144B7700759BC3" 
@@ -30,10 +30,12 @@ def save_portfolio(trades):
     with open("portfolio.json", "w") as f: json.dump(trades, f)
 
 if 'scalping_opps' not in st.session_state: st.session_state.scalping_opps = []
+if 'trend_opps' not in st.session_state: st.session_state.trend_opps = []
 if 'tracked_trades' not in st.session_state: st.session_state.tracked_trades = load_portfolio()
 
 def calculate_rsi(prices, period=14):
     deltas = np.diff(prices)
+    if len(deltas) < period + 1: return 50
     seed = deltas[:period+1]
     up = seed[seed >= 0].sum() / period
     down = -seed[seed < 0].sum() / period
@@ -95,55 +97,71 @@ def track_trade(opp, trade_type):
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.success("📈 المراقبة التلقائية مفعلة (EMA 20/50 + MACD + RSI الفلتر الإضافي).")
+    st.success("🤖 المراقبة التلقائية تعمل في الخلفية للسكالبينج والتريند (Futures).")
     
     symbols = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT']
-    all_opps = []
+    scalp_opps = []
+    trend_opps = []
     
     for symbol in symbols:
         try:
-            ohlcv = exchange.fetch_ohlcv(symbol, '5m', limit=150)
-            h = np.array([c[2] for c in ohlcv])
-            l = np.array([c[3] for c in ohlcv])
-            c = np.array([c[4] for c in ohlcv])
-            curr = c[-1]
+            # 1. فحص الاسكالبينج (فريم 5 دقائق)
+            ohlcv_5m = exchange.fetch_ohlcv(symbol, '5m', limit=150)
+            h5 = np.array([c[2] for c in ohlcv_5m])
+            l5 = np.array([c[3] for c in ohlcv_5m])
+            c5 = np.array([c[4] for c in ohlcv_5m])
+            curr = c5[-1]
             
-            ema20 = calculate_ema_series(c, 20)
-            ema50 = calculate_ema_series(c, 50)
-            macd, macd_signal = calculate_macd(c)
-            rsi = calculate_rsi(c)
-            atr = calculate_atr(h, l, c, 14)
+            ema20_5 = calculate_ema_series(c5, 20)
+            ema50_5 = calculate_ema_series(c5, 50)
+            macd_5, macds_5 = calculate_macd(c5)
+            rsi_5 = calculate_rsi(c5)
+            atr_5 = calculate_atr(h5, l5, c5, 14)
             
-            long_cross = (ema20.iloc[-2] <= ema50.iloc[-2]) and (ema20.iloc[-1] > ema50.iloc[-1])
-            short_cross = (ema20.iloc[-2] >= ema50.iloc[-2]) and (ema20.iloc[-1] < ema50.iloc[-1])
+            long_cross_5 = (ema20_5.iloc[-2] <= ema50_5.iloc[-2]) and (ema20_5.iloc[-1] > ema50_5.iloc[-1])
+            short_cross_5 = (ema20_5.iloc[-2] >= ema50_5.iloc[-2]) and (ema20_5.iloc[-1] < ema50_5.iloc[-1])
             
-            score = 0
-            direction = ""
-            
-            # الشروط الثلاثة مجتمعة (تقاطع + MACD + RSI)
-            if long_cross and macd > macd_signal and rsi > 50:
-                score = 98
-                direction = '🟢 LONG (EMA+MACD+RSI)'
-                tp = curr + (2.0 * atr)
-                sl = curr - (1.0 * atr)
-            elif short_cross and macd < macd_signal and rsi < 50:
-                score = 98
-                direction = '🔴 SHORT (EMA+MACD+RSI)'
-                tp = curr - (2.0 * atr)
-                sl = curr + (1.0 * atr)
-            else:
-                continue
+            if long_cross_5 and macd_5 > macds_5 and rsi_5 > 50:
+                scalp_opps.append({
+                    'symbol': symbol, 'direction': '🟢 LONG (Scalp)', 'price': curr, 'score': 98,
+                    'buy': round(curr, 4), 'tp': round(curr + (2.0 * atr_5), 4), 'sl': round(curr - (1.0 * atr_5), 4)
+                })
+            elif short_cross_5 and macd_5 < macds_5 and rsi_5 < 50:
+                scalp_opps.append({
+                    'symbol': symbol, 'direction': '🔴 SHORT (Scalp)', 'price': curr, 'score': 98,
+                    'buy': round(curr, 4), 'tp': round(curr - (2.0 * atr_5), 4), 'sl': round(curr + (1.0 * atr_5), 4)
+                })
                 
-            all_opps.append({
-                'symbol': symbol, 'direction': direction, 'price': curr, 'score': score,
-                'buy': round(curr, 4), 'tp': round(tp, 4), 'sl': round(sl, 4)
-            })
+            # 2. فحص استراتيجية تتبع الاتجاه Trend (فريم 15 دقيقة لتريند أدق)
+            ohlcv_15m = exchange.fetch_ohlcv(symbol, '15m', limit=100)
+            h15 = np.array([c[2] for c in ohlcv_15m])
+            l15 = np.array([c[3] for c in ohlcv_15m])
+            c15 = np.array([c[4] for c in ohlcv_15m])
+            curr_15 = c15[-1]
+            
+            ema50_15 = calculate_ema_series(c15, 50)
+            ema200_15 = calculate_ema_series(c15, 200)
+            atr_15 = calculate_atr(h15, l15, c15, 14)
+            
+            # تريند صاعد قوي: EMA 50 فوق EMA 200 والسعر فوقهم
+            if curr_15 > ema50_15.iloc[-1] and ema50_15.iloc[-1] > ema200_15.iloc[-1]:
+                trend_opps.append({
+                    'symbol': symbol, 'direction': '📈 LONG (Trend 15m)', 'price': curr_15, 'score': 96,
+                    'buy': round(curr_15, 4), 'tp': round(curr_15 + (3.0 * atr_15), 4), 'sl': round(curr_15 - (1.5 * atr_15), 4)
+                })
+            # تريند هابط قوي: EMA 50 تحت EMA 200 والسعر تحتهم
+            elif curr_15 < ema50_15.iloc[-1] and ema50_15.iloc[-1] < ema200_15.iloc[-1]:
+                trend_opps.append({
+                    'symbol': symbol, 'direction': '📉 SHORT (Trend 15m)', 'price': curr_15, 'score': 96,
+                    'buy': round(curr_15, 4), 'tp': round(curr_15 - (3.0 * atr_15), 4), 'sl': round(curr_15 + (1.5 * atr_15), 4)
+                })
         except: continue
             
-    if all_opps and len(all_opps) != len(st.session_state.scalping_opps):
+    if (scalp_opps or trend_opps) and (len(scalp_opps) != len(st.session_state.scalping_opps)):
         play_audio_alert()
         
-    st.session_state.scalping_opps = all_opps
+    st.session_state.scalping_opps = scalp_opps
+    st.session_state.trend_opps = trend_opps
 
 with col2:
     if st.button('🔄 تحديث المحفظة يدوي'):
@@ -161,6 +179,7 @@ with col2:
                                 if curr >= t['tp']: t['status'] = '🎯 ربح (Hit TP)'
                                 elif curr <= t['sl']: t['status'] = '🛑 خسارة (Hit SL)'
                             else:
+                                # تعديل دقيق لسرعة إغلاق صفقات الشورت بمجرد ضرب الهدف
                                 if curr <= t['tp']: t['status'] = '🎯 ربح (Hit TP)'
                                 elif curr >= t['sl']: t['status'] = '🛑 خسارة (Hit SL)'
                     except: pass
@@ -178,16 +197,26 @@ with col2:
         save_portfolio([])
         st.success("تم مسح كل الصفقات!")
 
-tab3, tab4 = st.tabs(["⏱️ Scalping (الاستراتيجية المحدثة)", "💼 محفظتي (دائمة)"])
+tab3, tab_trend, tab4 = st.tabs(["⏱️ Scalping (5m)", "🌊 Trend Following (15m)", "💼 محفظتي (دائمة)"])
 
 with tab3:
-    st.info("📈 البوت يراقب الآن (EMA 20/50 + MACD + RSI) على فريم الـ 5 دقائق لتصفية أي صفقات معاكسة للاتجاه.")
+    st.info("⏱️ إشارات السكالبينج السريعة باستخدام (EMA 20/50 + MACD + RSI).")
     if not st.session_state.scalping_opps:
-        st.warning("جاري فحص السوق بدقة وفق الشروط الثلاثة الجديدة..")
+        st.warning("جاري فحص صفقات السكالبينج اللحظية..")
     else:
         for i, opp in enumerate(st.session_state.scalping_opps, 1):
-            st.markdown(f"**{opp['symbol']}** {opp['direction']} (تقييم: {opp['score']}/100 ⭐️) | السعر: {opp['price']} | هدف: `{opp['tp']}` | وقف: `{opp['sl']}`")
-            if st.button(f"➕ تتبع", key=f"sc_{i}_{opp['symbol']}"): track_trade(opp, 'Scalping')
+            st.markdown(f"**{opp['symbol']}** {opp['direction']} | السعر: {opp['price']} | هدف: `{opp['tp']}` | وقف: `{opp['sl']}`")
+            if st.button(f"➕ تتبع اسكالبينج", key=f"sc_{i}_{opp['symbol']}"): track_trade(opp, 'Scalping')
+
+with tab_trend:
+    st.info("🌊 صفقات تتبع الاتجاه (Trend Following) على فريم 15 دقيقة لركوب الموجات الكبيرة بأمان.")
+    if not st.session_state.trend_opps:
+        st.warning("جاري البحث عن تريندات قوية واضحة..")
+    else:
+        for i, opp in enumerate(st.session_state.trend_opps, 1):
+            st.markdown(f"**{opp['symbol']}** {opp['direction']} | السعر: {opp['price']} | هدف واسع: `{opp['tp']}` | وقف: `{opp['sl']}`")
+            if st.button(f"➕ تتبع تريند", key=f"tr_{i}_{opp['symbol']}"): track_trade(opp, 'Trend')
+
 with tab4:
     if not st.session_state.tracked_trades: st.warning("المحفظة فارغة.")
     else:
@@ -196,10 +225,11 @@ with tab4:
             if "نشطة" in t['status']: status_icon = "🟢"
             elif "ربح" in t['status']: status_icon = "🎯"
             elif "خسارة" in t['status']: status_icon = "🛑"
-            st.markdown(f"**{t['symbol']}** | {t['type']} | {t['direction']} | {status_icon} **{t['status']}**")
+            st.markdown(f"**{t['symbol']}** | نوع: {t['type']} | {t['direction']} | {status_icon} **{t['status']}**")
             st.markdown(f"دخول: {t['entry']} | هدف: {t['tp']} | وقف: {t['sl']}")
             st.markdown("---")
 
 time.sleep(60)
 st.rerun()
+
 
