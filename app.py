@@ -6,8 +6,8 @@ import time
 import json
 import os
 
-st.set_page_config(page_title="Glow Pro Bot", page_icon="📈", layout="wide")
-st.title("📈 تطبيق التوصيات الاحترافي (استراتيجية المؤشرات الخمسة المتقدمة)")
+st.set_page_config(page_title="Glow Pro Master Bot", page_icon="🦅", layout="wide")
+st.title("🦅 تطبيق التوصيات الاحترافي (نسخة القناص المتقدم: التريند والدعم والمقاومة)")
 
 API_KEY = "41e8e6d1-3d2d-4861-b0df-61ccdb79e34b"
 SECRET_KEY = "1FC2FDF62E1F188458144B7700759BC3" 
@@ -71,6 +71,24 @@ def calculate_atr(highs, lows, closes, period=14):
     atr = pd.Series(tr_list).rolling(window=period).mean().iloc[-1]
     return atr if not np.isnan(atr) else (highs[-1] * 0.01)
 
+# مؤشر قوة الاتجاه (ADX) لفلترة التذبذب العرضي
+def calculate_adx(highs, lows, closes, period=14):
+    plus_dm = np.diff(highs)
+    minus_dm = -np.diff(lows)
+    plus_dm[plus_dm < 0] = 0
+    minus_dm[minus_dm < 0] = 0
+    
+    tr_list = [highs[0] - lows[0]]
+    for i in range(1, len(closes)):
+        tr_list.append(max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1])))
+    tr = pd.Series(tr_list).rolling(window=period).mean()
+    
+    plus_di = 100 * (pd.Series(plus_dm).rolling(window=period).mean() / tr)
+    minus_di = 100 * (pd.Series(minus_dm).rolling(window=period).mean() / tr)
+    dx = 100 * np.abs(plus_di - minus_di) / (plus_di + minus_di)
+    adx = dx.rolling(window=period).mean().iloc[-1]
+    return adx if not np.isnan(adx) else 20
+
 def track_trade(opp, trade_type):
     for t in st.session_state.tracked_trades:
         if t['symbol'] == opp['symbol'] and t['status'] in ['⏳ معلقة', '🟢 نشطة']:
@@ -87,8 +105,8 @@ def track_trade(opp, trade_type):
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    if st.button('🔍 فحص السوق بالاستراتيجية المتقدمة'):
-        with st.spinner('جاري فحص المؤشرات الخمسة (EMA, MACD, RSI, Vol, ATR)...'):
+    if st.button('🦅 فحص السوق الاستراتيجي المتقدم'):
+        with st.spinner('جاري تحليل الاتجاه (ADX)، الدعم والمقاومة، وباقي المؤشرات...'):
             symbols = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT']
             all_opps = []
             
@@ -101,36 +119,42 @@ with col1:
                     v = np.array([c[5] for c in ohlcv])
                     curr = c[-1]
                     
-                    # 1. حساب مؤشرات الاستراتيجية
+                    # حساب المؤشرات
                     ema5 = calculate_ema_series(c, 5)
                     ema13 = calculate_ema_series(c, 13)
                     macd, macd_signal = calculate_macd(c)
                     rsi = calculate_rsi(c)
                     atr = calculate_atr(h, l, c, 14)
+                    adx = calculate_adx(h, l, c, 14)
                     
-                    # 2. الشروط الصارمة
-                    # التقاطع
+                    # حساب مستويات الدعم والمقاومة البسيطة (Pivot / High-Low Range)
+                    recent_high = np.max(h[-20:])
+                    recent_low = np.min(l[-20:])
+                    
+                    # الشروط الاحترافية
                     long_cross = (ema5.iloc[-2] <= ema13.iloc[-2]) and (ema5.iloc[-1] > ema13.iloc[-1])
                     short_cross = (ema5.iloc[-2] >= ema13.iloc[-2]) and (ema5.iloc[-1] < ema13.iloc[-1])
-                    
-                    # الفوليوم
                     vol_burst = v[-1] > np.mean(v[-6:-1])
+                    
+                    # فلتر اتجاه السوق: ADX لازم يكون فوق 20 (يعني فيه تريند مش تذبذب رخم)
+                    # وفلتر الدعم والمقاومة: Long يكون قريب من الدعم، Short يكون قريب من المقاومة
+                    near_support = (curr - recent_low) / (recent_high - recent_low) < 0.4 if recent_high != recent_low else True
+                    near_resistance = (recent_high - curr) / (recent_high - recent_low) < 0.4 if recent_high != recent_low else True
                     
                     score = 0
                     direction = ""
                     
-                    if long_cross and macd > macd_signal and rsi < 65 and vol_burst:
+                    if long_cross and macd > macd_signal and rsi < 65 and vol_burst and adx > 18 and near_support:
                         score = 100
-                        direction = '🟢 LONG متقدم'
-                        tp = curr + (2.0 * atr)
-                        sl = curr - (1.0 * atr)
-                    elif short_cross and macd < macd_signal and rsi > 35 and vol_burst:
+                        direction = '🟢 LONG قناص'
+                        tp = curr + (2.2 * atr)
+                        sl = curr - (1.1 * atr)
+                    elif short_cross and macd < macd_signal and rsi > 35 and vol_burst and adx > 18 and near_resistance:
                         score = 100
-                        direction = '🔴 SHORT متقدم'
-                        tp = curr - (2.0 * atr)
-                        sl = curr + (1.0 * atr)
+                        direction = '🔴 SHORT قناص'
+                        tp = curr - (2.2 * atr)
+                        sl = curr + (1.1 * atr)
                     else:
-                        # لو الشروط مش كاملة، بنديها تقييم ضعيف عشان نتأكد إن البوت مبيجيبش غير الصفقات المكتملة فقط
                         continue
                         
                     all_opps.append({
@@ -158,7 +182,7 @@ with col2:
                                 elif curr <= t['sl']: t['status'] = '🛑 خسارة (Hit SL)'
                             else:
                                 if curr <= t['tp']: t['status'] = '🎯 ربح (Hit TP)'
-                                elif curr >= t['sl']: t['status'] = '🛑 خسارة (Hit SL)'
+                                elif >= t['sl']: t['status'] = '🛑 خسارة (Hit SL)'
                     except: pass
             save_portfolio(st.session_state.tracked_trades)
         st.success("تم التحديث!")
@@ -174,12 +198,12 @@ with col2:
         save_portfolio([])
         st.success("تم مسح كل الصفقات!")
 
-tab3, tab4 = st.tabs(["⏱️ Scalping (استراتيجية 5 مؤشرات)", "💼 محفظتي (دائمة)"])
+tab3, tab4 = st.tabs(["⏱️ Scalping (استراتيجية القناص المتكاملة)", "💼 محفظتي (دائمة)"])
 
 with tab3:
-    st.info("⚙️ البوت الآن لا يظهر أي صفقة إلا إذا توافقت مؤشرات الـ (EMA + MACD + RSI + Volume + ATR) معاً بشكل كامل وصارم.")
+    st.info("🦅 البوت يدمج الآن فلتر قوة التريند (ADX) ومناطق الدعم والمقاومة مع مؤشرات الزخم والسيولة لضمان أعلى دقة ممكنة.")
     if not st.session_state.scalping_opps:
-        st.warning("لا توجد صفقات مطابقة لشروط المؤشرات الخمسة حالياً. (اضغط فحص مرة أخرى لاحقاً حتى تكتمل الشروط).")
+        st.warning("البوت يراقب السوق بدقة.. في انتظار توافق التريند ومناطق الدعم/المقاومة الحقيقية.")
     else:
         for i, opp in enumerate(st.session_state.scalping_opps, 1):
             st.markdown(f"**{opp['symbol']}** {opp['direction']} (تقييم: {opp['score']}/100 ⭐️) | السعر: {opp['price']} | هدف: `{opp['tp']}` | وقف: `{opp['sl']}`")
@@ -195,4 +219,5 @@ with tab4:
             st.markdown(f"**{t['symbol']}** | {t['type']} | {t['direction']} | {status_icon} **{t['status']}**")
             st.markdown(f"دخول: {t['entry']} | هدف: {t['tp']} | وقف: {t['sl']}")
             st.markdown("---")
+
 
