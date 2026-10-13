@@ -7,7 +7,7 @@ import json
 import os
 
 st.set_page_config(page_title="Glow Pro Multi-Target Bot", page_icon="🚀", layout="wide")
-st.title("🚀 تطبيق التوصيات الذكي (بأنظمة الأهداف المتعددة وتأمين الصفقات)")
+st.title("🚀 تطبيق التوصيات الذكي (أهداف مئوية متباينة ودقيقة)")
 
 API_KEY = "41e8e6d1-3d2d-4861-b0df-61ccdb79e34b"
 SECRET_KEY = "1FC2FDF62E1F188458144B7700759BC3" 
@@ -81,6 +81,11 @@ def play_audio_alert():
     """
     st.markdown(audio_html, unsafe_allow_html=True)
 
+def get_decimals(price):
+    if price < 1: return 4
+    elif price < 10: return 3
+    else: return 2
+
 def track_trade(opp, trade_type):
     for t in st.session_state.tracked_trades:
         if t['symbol'] == opp['symbol'] and t['status'] in ['⏳ معلقة', '🟢 نشطة']:
@@ -98,7 +103,7 @@ def track_trade(opp, trade_type):
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.success("🤖 المراقبة تعمل مع نظام الأهداف المتعددة (TP1 / TP2) وحماية الدخول.")
+    st.success("🤖 المراقبة تعمل بنظام الأهداف المئوية المتباينة بدقة.")
     
     symbols = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT']
     scalp_opps = []
@@ -106,6 +111,10 @@ with col1:
     
     for symbol in symbols:
         try:
+            ticker_check = exchange.fetch_ticker(symbol)
+            curr_price = ticker_check['last']
+            dec = get_decimals(curr_price)
+            
             # 1. فحص الاسكالبينج (5 دقائق)
             ohlcv_5m = exchange.fetch_ohlcv(symbol, '5m', limit=150)
             h5 = np.array([c[2] for c in ohlcv_5m])
@@ -126,16 +135,22 @@ with col1:
                 score = min(98, int(85 + (rsi_5 - 50) * 0.3 + abs(macd_5 - macds_5) * 10))
                 scalp_opps.append({
                     'symbol': symbol, 'direction': '🟢 LONG (Scalp)', 'price': curr, 'score': score,
-                    'buy': round(curr, 4), 'tp1': round(curr + (1.2 * atr_5), 4), 'tp2': round(curr + (2.5 * atr_5), 4), 'sl': round(curr - (1.0 * atr_5), 4)
+                    'buy': round(curr, dec), 
+                    'tp1': round(curr * 1.006, dec),  # هدف أول 0.6%
+                    'tp2': round(curr * 1.015, dec),  # هدف ثاني 1.5%
+                    'sl': round(curr - (1.0 * atr_5), dec)
                 })
             elif short_cross_5 and macd_5 < macds_5 and rsi_5 < 50:
                 score = min(98, int(85 + (50 - rsi_5) * 0.3 + abs(macd_5 - macds_5) * 10))
                 scalp_opps.append({
                     'symbol': symbol, 'direction': '🔴 SHORT (Scalp)', 'price': curr, 'score': score,
-                    'buy': round(curr, 4), 'tp1': round(curr - (1.2 * atr_5), 4), 'tp2': round(curr - (2.5 * atr_5), 4), 'sl': round(curr + (1.0 * atr_5), 4)
+                    'buy': round(curr, dec), 
+                    'tp1': round(curr * 0.994, dec),  # هدف أول هبوط 0.6%
+                    'tp2': round(curr * 0.985, dec),  # هدف ثاني هبوط 1.5%
+                    'sl': round(curr + (1.0 * atr_5), dec)
                 })
                 
-            # 2. فحص التريند (15 دقيقة)
+            # 2. فحص التريند (15 دقيقة) - مسافات أوسع ومتباينة بوضوح
             ohlcv_15m = exchange.fetch_ohlcv(symbol, '15m', limit=100)
             h15 = np.array([c[2] for c in ohlcv_15m])
             l15 = np.array([c[3] for c in ohlcv_15m])
@@ -150,13 +165,19 @@ with col1:
                 trend_strength = min(99, int(90 + ((curr_15 - ema50_15.iloc[-1]) / curr_15) * 100))
                 trend_opps.append({
                     'symbol': symbol, 'direction': '📈 LONG (Trend 15m)', 'price': curr_15, 'score': trend_strength,
-                    'buy': round(curr_15, 4), 'tp1': round(curr_15 + (1.8 * atr_15), 4), 'tp2': round(curr_15 + (3.5 * atr_15), 4), 'sl': round(curr_15 - (1.2 * atr_15), 4)
+                    'buy': round(curr_15, dec), 
+                    'tp1': round(curr_15 * 1.012, dec), # هدف أول للتريند 1.2%
+                    'tp2': round(curr_15 * 1.028, dec), # هدف ثاني للتريند 2.8%
+                    'sl': round(curr_15 - (1.2 * atr_15), dec)
                 })
             elif curr_15 < ema50_15.iloc[-1] and ema50_15.iloc[-1] < ema200_15.iloc[-1]:
                 trend_strength = min(99, int(90 + ((ema50_15.iloc[-1] - curr_15) / curr_15) * 100))
                 trend_opps.append({
                     'symbol': symbol, 'direction': '📉 SHORT (Trend 15m)', 'price': curr_15, 'score': trend_strength,
-                    'buy': round(curr_15, 4), 'tp1': round(curr_15 - (1.8 * atr_15), 4), 'tp2': round(curr_15 - (3.5 * atr_15), 4), 'sl': round(curr_15 + (1.2 * atr_15), 4)
+                    'buy': round(curr_15, dec), 
+                    'tp1': round(curr_15 * 0.988, dec), # هدف أول هبوط للتريند 1.2%
+                    'tp2': round(curr_15 * 0.972, dec), # هدف ثاني هبوط للتريند 2.8%
+                    'sl': round(curr_15 + (1.2 * atr_15), dec)
                 })
         except: continue
             
@@ -220,7 +241,7 @@ with col2:
 tab3, tab_trend, tab4 = st.tabs(["⏱️ Scalping (5m)", "🌊 Trend Following (15m)", "💼 محفظتي (دائمة)"])
 
 with tab3:
-    st.info("⏱️ صفقات السكالبينج مع هدفين (TP1 / TP2).")
+    st.info("⏱️ صفقات السكالبينج بنسب أهداف واضحة.")
     if not st.session_state.scalping_opps:
         st.warning("جاري البحث عن فرص سكالبينج دقيقة..")
     else:
@@ -229,7 +250,7 @@ with tab3:
             if st.button(f"➕ تتبع اسكالبينج", key=f"sc_{i}_{opp['symbol']}"): track_trade(opp, 'Scalping')
 
 with tab_trend:
-    st.info("🌊 صفقات تتبع الاتجاه مع أهداف متعددة وتأمين الوقف.")
+    st.info("🌊 صفقات تتبع الاتجاه بأهداف مئوية متباينة.")
     if not st.session_state.trend_opps:
         st.warning("جاري البحث عن تريندات واضحة..")
     else:
@@ -255,5 +276,6 @@ with tab4:
             st.markdown(f"دخول: {t['entry']} | TP1: {tp1_val} | TP2: {tp2_val} | وقف: {t['sl']}")
             st.markdown("---")
 
-time.sleep(60)
+time.sleep60)
 st.rerun()
+
