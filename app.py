@@ -66,7 +66,6 @@ def calculate_vwap(highs, lows, closes, volumes):
     typical_price = (highs + lows + closes) / 3
     return np.sum(typical_price * volumes) / np.sum(volumes)
 
-# أدوات السكالبينج الجديدة (ATR, EMA, ADX)
 def calculate_ema(prices, period):
     return pd.Series(prices).ewm(span=period, adjust=False).mean().iloc[-1]
 
@@ -124,8 +123,8 @@ def track_trade(opp, trade_type):
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    if st.button('🔍 فحص السوق بأدوات السكالبينج الديناميكية'):
-        with st.spinner('جاري التحليل واستخدام أدوات ATR و الفلاتر الصارمة...'):
+    if st.button('🔍 فحص السوق بأدوات السكالبينج السريعة'):
+        with st.spinner('جاري قنص الصفقات على فريم الدقيقة 1m والـ 5m...'):
             symbols = ['XRP/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT', 'ADA/USDT', 'AVAX/USDT', 'LINK/USDT', 'DOT/USDT', 'NEAR/USDT', 'BNB/USDT', 'MATIC/USDT', 'LTC/USDT']
             
             btc_bullish = True
@@ -137,45 +136,45 @@ with col1:
             all_1h, all_5m = [], []
             for symbol in symbols:
                 try:
-                    # فريم الساعة
+                    # فريم الساعة (للاتجاه العام)
                     ohlcv_1h = exchange.fetch_ohlcv(symbol, '1h', limit=50)
                     h_1h = np.array([c[2] for c in ohlcv_1h]); l_1h = np.array([c[3] for c in ohlcv_1h]); c_1h = np.array([c[4] for c in ohlcv_1h]); v_1h = np.array([c[5] for c in ohlcv_1h])
                     r_1h = calculate_rsi(c_1h); m_1h, s_1h = calculate_macd(c_1h); vwap_1h = calculate_vwap(h_1h[-20:], l_1h[-20:], c_1h[-20:], v_1h[-20:]); curr = c_1h[-1]
+                    ema20_1h = calculate_ema(c_1h, 20)
                     
                     sl = 40 + (15 if btc_bullish else 0) + (15 if curr > vwap_1h else 0) + (15 if m_1h > s_1h else 0) + (15 if 40 < r_1h < 70 else 0)
                     ss = 40 + (15 if not btc_bullish else 0) + (15 if curr < vwap_1h else 0) + (15 if m_1h < s_1h else 0) + (15 if 30 < r_1h < 60 else 0)
                     all_1h.append({'symbol': symbol, 'price': curr, 'score_l': sl, 'score_s': ss})
                     
-                    # فريم 5 دقائق
+                    # فريم 5 دقائق (للسيولة والـ ADX والـ ATR)
                     ohlcv_5m = exchange.fetch_ohlcv(symbol, '5m', limit=50)
                     h_5m = np.array([c[2] for c in ohlcv_5m]); l_5m = np.array([c[3] for c in ohlcv_5m]); c_5m = np.array([c[4] for c in ohlcv_5m]); v_5m = np.array([c[5] for c in ohlcv_5m])
                     curr_5m = c_5m[-1]
                     
-                    # حساب المؤشرات الأساسية
                     vwap_5m = calculate_vwap(h_5m[-20:], l_5m[-20:], c_5m[-20:], v_5m[-20:])
-                    ema9 = calculate_ema(c_5m, 9)
-                    ema21 = calculate_ema(c_5m, 21)
                     atr = calculate_atr(h_5m, l_5m, c_5m, 14)
+                    vol_sma20 = np.mean(v_5m[-20:])
+                    adx_val = calculate_adx(h_5m, l_5m, c_5m, 14)
                     
-                    # حساب فلاتر الحماية الثلاثة الجديدة
-                    ema20_1h = calculate_ema(c_1h, 20) # 1. الاتجاه العام من فريم الساعة
-                    vol_sma20 = np.mean(v_5m[-20:])    # 2. متوسط السيولة لآخر 20 شمعة
-                    adx_val = calculate_adx(h_5m, l_5m, c_5m, 14) # 3. قياس الزخم وقوة التريند
+                    # فريم الدقيقة 1m (لزناد الدخول السريع جداً)
+                    ohlcv_1m = exchange.fetch_ohlcv(symbol, '1m', limit=30)
+                    c_1m = np.array([c[4] for c in ohlcv_1m])
+                    ema5_1m = calculate_ema(c_1m, 5)   # متوسط سريع جداً
+                    ema13_1m = calculate_ema(c_1m, 13) # متوسط الإشارة السريع
                     
-                    # التقييم المبدئي
-                    sl_5m = 40 + (30 if curr_5m > vwap_5m else 0) + (20 if ema9 > ema21 else 0) + (10 if v_5m[-1] > np.mean(v_5m[-10:]) else 0)
-                    ss_5m = 40 + (30 if curr_5m < vwap_5m else 0) + (20 if ema9 < ema21 else 0) + (10 if v_5m[-1] > np.mean(v_5m[-10:]) else 0)
+                    # التقييم المبدئي بناءً على زناد الـ 1 دقيقة
+                    sl_5m = 40 + (30 if curr_5m > vwap_5m else 0) + (20 if ema5_1m > ema13_1m else 0) + (10 if v_5m[-1] > np.mean(v_5m[-10:]) else 0)
+                    ss_5m = 40 + (30 if curr_5m < vwap_5m else 0) + (20 if ema5_1m < ema13_1m else 0) + (10 if v_5m[-1] > np.mean(v_5m[-10:]) else 0)
                     
-                    # تطبيق الخصم الصارم (Cascade Filtering)
-                    if curr_5m < ema20_1h: sl_5m -= 30  # عكس التيار الصاعد
-                    if v_5m[-1] < vol_sma20: sl_5m -= 20 # سيولة ضعيفة
-                    if adx_val < 25: sl_5m -= 20 # نطاق عرضي متذبذب
+                    # الفلاتر الصارمة
+                    if curr_5m < ema20_1h: sl_5m -= 30
+                    if v_5m[-1] < vol_sma20: sl_5m -= 20
+                    if adx_val < 25: sl_5m -= 20
                     
-                    if curr_5m > ema20_1h: ss_5m -= 30  # عكس التيار الهابط
-                    if v_5m[-1] < vol_sma20: ss_5m -= 20 # سيولة ضعيفة
-                    if adx_val < 25: ss_5m -= 20 # نطاق عرضي متذبذب
+                    if curr_5m > ema20_1h: ss_5m -= 30
+                    if v_5m[-1] < vol_sma20: ss_5m -= 20
+                    if adx_val < 25: ss_5m -= 20
                     
-                    # منع التقييم من النزول تحت الصفر
                     sl_5m = max(0, sl_5m)
                     ss_5m = max(0, ss_5m)
                     
@@ -196,8 +195,8 @@ with col1:
                 fs = [{'symbol': i['symbol'], 'direction': '🔴 SHORT', 'price': i['price'], 'score': i['score_s'], 'buy': round(i['price']*1.002,4), 'tp': round(i['price']*0.975,4), 'sl': round(i['price']*1.02,4), 'leverage': '5x'} for i in sorted(all_1h, key=lambda x: x['score_s'], reverse=True)[:2]]
                 st.session_state.futures_opps = sorted(fl + fs, key=lambda x: x['score'], reverse=True)
                 
-                scl = [{'symbol': i['symbol'], 'direction': '🟢 LONG ATR', 'price': i['price'], 'score': i['score_l'], 'buy': round(i['price'],4), 'tp': round(i['buy_tp'],4), 'sl': round(i['buy_sl'],4), 'leverage': '20x'} for i in sorted(all_5m, key=lambda x: x['score_l'], reverse=True)[:3]]
-                scs = [{'symbol': i['symbol'], 'direction': '🔴 SHORT ATR', 'price': i['price'], 'score': i['score_s'], 'buy': round(i['price'],4), 'tp': round(i['sell_tp'],4), 'sl': round(i['sell_sl'],4), 'leverage': '20x'} for i in sorted(all_5m, key=lambda x: x['score_s'], reverse=True)[:2]]
+                scl = [{'symbol': i['symbol'], 'direction': '🟢 LONG السريع', 'price': i['price'], 'score': i['score_l'], 'buy': round(i['price'],4), 'tp': round(i['buy_tp'],4), 'sl': round(i['buy_sl'],4), 'leverage': '20x'} for i in sorted(all_5m, key=lambda x: x['score_l'], reverse=True)[:3]]
+                scs = [{'symbol': i['symbol'], 'direction': '🔴 SHORT السريع', 'price': i['price'], 'score': i['score_s'], 'buy': round(i['price'],4), 'tp': round(i['sell_tp'],4), 'sl': round(i['sell_sl'],4), 'leverage': '20x'} for i in sorted(all_5m, key=lambda x: x['score_s'], reverse=True)[:2]]
                 st.session_state.scalping_opps = sorted(scl + scs, key=lambda x: x['score'], reverse=True)
 
 with col2:
@@ -234,7 +233,7 @@ with col2:
         save_portfolio([])
         st.success("تم مسح كل الصفقات! (اضغطي تحديث للرؤية)")
 
-tab1, tab2, tab3, tab4 = st.tabs(["📊 Spot", "⚡ Futures", "⏱️ Scalping (ATR)", "💼 محفظتي (دائمة)"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Spot", "⚡ Futures", "⏱️ Scalping (سريع)", "💼 محفظتي (دائمة)"])
 
 with tab1:
     for i, opp in enumerate(st.session_state.spot_opps, 1):
@@ -245,7 +244,7 @@ with tab2:
         st.markdown(f"**{opp['symbol']}** {opp['direction']} ({opp['score']}/100 ⭐️) | الحالي: {opp['price']} | دخول: `{opp['buy']}` | هدف: `{opp['tp']}` | وقف: `{opp['sl']}`")
         if st.button(f"➕ تتبع", key=f"f_{i}_{opp['symbol']}"): track_trade(opp, 'Futures')
 with tab3:
-    st.info("💡 يتم فلترة الصفقات بصرامة باستخدام مؤشرات السيولة، اتجاه الساعة، وقوة الزخم (ADX) لمنع الإشارات الوهمية.")
+    st.info("⚡ تم تفعيل الدخول السريع بناءً على تقاطعات فريم الدقيقة (1m) مع فلاتر حماية الساعة والسيولة.")
     for i, opp in enumerate(st.session_state.scalping_opps, 1):
         st.markdown(f"**{opp['symbol']}** {opp['direction']} ({opp['score']}/100 ⭐️) | الحالي: {opp['price']} | دخول: `{opp['buy']}` | هدف: `{opp['tp']}` | وقف: `{opp['sl']}`")
         if st.button(f"➕ تتبع", key=f"sc_{i}_{opp['symbol']}"): track_trade(opp, 'Scalping')
@@ -260,3 +259,4 @@ with tab4:
             st.markdown(f"**{t['symbol']}** | {t['type']} | {t['direction']} | {status_icon} **{t['status']}**")
             st.markdown(f"دخول: {t['entry']} | هدف: {t['tp']} | وقف: {t['sl']}")
             st.markdown("---")
+ 
