@@ -7,7 +7,7 @@ import json
 import os
 
 st.set_page_config(page_title="Glow Pro Bot", page_icon="📈", layout="wide")
-st.title("📈 تطبيق التوصيات الاحترافي (نسخة القناص اللحظي)")
+st.title("📈 تطبيق التوصيات الاحترافي (نسخة القناص اللحظي المتطابقة)")
 
 API_KEY = "41e8e6d1-3d2d-4861-b0df-61ccdb79e34b"
 SECRET_KEY = "1FC2FDF62E1F188458144B7700759BC3" 
@@ -64,8 +64,9 @@ def calculate_vwap(highs, lows, closes, volumes):
     typical_price = (highs + lows + closes) / 3
     return np.sum(typical_price * volumes) / np.sum(volumes)
 
-def calculate_ema(prices, period):
-    return pd.Series(prices).ewm(span=period, adjust=False).mean().iloc[-1]
+# تعديل جوهري: إرجاع السلسلة كاملة لضمان تطابق الأرقام مع المنصة
+def calculate_ema_series(prices, period):
+    return pd.Series(prices).ewm(span=period, adjust=False).mean()
 
 def calculate_atr(highs, lows, closes, period=14):
     tr_list = [highs[0] - lows[0]]
@@ -76,28 +77,6 @@ def calculate_atr(highs, lows, closes, period=14):
         tr_list.append(max(h_l, h_pc, l_pc))
     atr = pd.Series(tr_list).rolling(window=period).mean().iloc[-1]
     return atr if not np.isnan(atr) else (highs[-1] * 0.01)
-
-def calculate_adx(highs, lows, closes, period=14):
-    try:
-        highs_s = pd.Series(highs)
-        lows_s = pd.Series(lows)
-        closes_s = pd.Series(closes)
-        up_move = highs_s - highs_s.shift(1)
-        down_move = lows_s.shift(1) - lows_s
-        plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
-        minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
-        tr1 = highs_s - lows_s
-        tr2 = abs(highs_s - closes_s.shift(1))
-        tr3 = abs(lows_s - closes_s.shift(1))
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        tr_roll = tr.ewm(alpha=1/period, adjust=False).mean()
-        plus_di = 100 * (pd.Series(plus_dm).ewm(alpha=1/period, adjust=False).mean() / tr_roll)
-        minus_di = 100 * (pd.Series(minus_dm).ewm(alpha=1/period, adjust=False).mean() / tr_roll)
-        dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
-        adx = dx.ewm(alpha=1/period, adjust=False).mean().iloc[-1]
-        return adx if not np.isnan(adx) else 25
-    except:
-        return 25
 
 def track_trade(opp, trade_type):
     for t in st.session_state.tracked_trades:
@@ -116,68 +95,64 @@ def track_trade(opp, trade_type):
 col1, col2 = st.columns([3, 1])
 with col1:
     if st.button('🔍 فحص السوق بأدوات السكالبينج السريعة'):
-        with st.spinner('جاري قنص الصفقات اللحظية على فريم الدقيقة...'):
+        with st.spinner('جاري قنص الصفقات اللحظية...'):
             symbols = ['XRP/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT', 'ADA/USDT', 'AVAX/USDT', 'LINK/USDT', 'DOT/USDT', 'NEAR/USDT', 'BNB/USDT', 'MATIC/USDT', 'LTC/USDT']
             
             btc_bullish = True
             try:
-                btc_ohlcv = exchange.fetch_ohlcv('BTC/USDT', '1h', limit=50)
+                btc_ohlcv = exchange.fetch_ohlcv('BTC/USDT', '1h', limit=100)
                 if btc_ohlcv[-1][4] < np.mean([c[4] for c in btc_ohlcv[-20:]]): btc_bullish = False
             except: pass
                 
             all_1h, all_5m = [], []
             for symbol in symbols:
                 try:
-                    # ====== فريم الساعة (للاتجاه العام) ======
-                    ohlcv_1h = exchange.fetch_ohlcv(symbol, '1h', limit=50)
+                    # فريم الساعة
+                    ohlcv_1h = exchange.fetch_ohlcv(symbol, '1h', limit=100)
                     h_1h = np.array([c[2] for c in ohlcv_1h]); l_1h = np.array([c[3] for c in ohlcv_1h]); c_1h = np.array([c[4] for c in ohlcv_1h]); v_1h = np.array([c[5] for c in ohlcv_1h])
                     r_1h = calculate_rsi(c_1h); m_1h, s_1h = calculate_macd(c_1h); vwap_1h = calculate_vwap(h_1h[-20:], l_1h[-20:], c_1h[-20:], v_1h[-20:]); curr = c_1h[-1]
-                    ema20_1h = calculate_ema(c_1h, 20)
+                    ema20_1h = calculate_ema_series(c_1h, 20).iloc[-1]
                     
                     sl = 40 + (15 if btc_bullish else 0) + (15 if curr > vwap_1h else 0) + (15 if m_1h > s_1h else 0) + (15 if 40 < r_1h < 70 else 0)
                     ss = 40 + (15 if not btc_bullish else 0) + (15 if curr < vwap_1h else 0) + (15 if m_1h < s_1h else 0) + (15 if 30 < r_1h < 60 else 0)
                     all_1h.append({'symbol': symbol, 'price': curr, 'score_l': sl, 'score_s': ss})
                     
-                    # ====== فريم 5 دقائق (لحساب الهدف والوقف ATR فقط) ======
-                    ohlcv_5m = exchange.fetch_ohlcv(symbol, '5m', limit=50)
+                    # فريم 5 دقائق
+                    ohlcv_5m = exchange.fetch_ohlcv(symbol, '5m', limit=100)
                     h_5m = np.array([c[2] for c in ohlcv_5m]); l_5m = np.array([c[3] for c in ohlcv_5m]); c_5m = np.array([c[4] for c in ohlcv_5m])
                     curr_5m = c_5m[-1]
                     atr = calculate_atr(h_5m, l_5m, c_5m, 14)
                     
-                    # ====== فريم الدقيقة 1m (الزناد اللحظي والسيولة) ======
-                    ohlcv_1m = exchange.fetch_ohlcv(symbol, '1m', limit=30)
+                    # فريم الدقيقة (سحب 100 شمعة لتطابق الـ EMA مع المنصة)
+                    ohlcv_1m = exchange.fetch_ohlcv(symbol, '1m', limit=100)
                     c_1m = np.array([c[4] for c in ohlcv_1m])
                     v_1m = np.array([c[5] for c in ohlcv_1m])
                     
-                    ema5_1m = calculate_ema(c_1m, 5)
-                    ema13_1m = calculate_ema(c_1m, 13)
-                    ema5_1m_prev = calculate_ema(c_1m[:-1], 5)
-                    ema13_1m_prev = calculate_ema(c_1m[:-1], 13)
+                    # الحساب الصحيح: استخراج السلسلة كاملة ثم أخذ آخر شمعتين
+                    ema5_series = calculate_ema_series(c_1m, 5)
+                    ema13_series = calculate_ema_series(c_1m, 13)
                     
-                    # 1. هل التقاطع طازج؟ (حصل في الشمعة دي بس)
+                    ema5_1m = ema5_series.iloc[-1]
+                    ema13_1m = ema13_series.iloc[-1]
+                    ema5_1m_prev = ema5_series.iloc[-2]
+                    ema13_1m_prev = ema13_series.iloc[-2]
+                    
                     fresh_long = (ema5_1m_prev <= ema13_1m_prev) and (ema5_1m > ema13_1m)
                     fresh_short = (ema5_1m_prev >= ema13_1m_prev) and (ema5_1m < ema13_1m)
-
-                    # 2. هل في سيولة لحظية دخلت؟ (فوليوم الشمعة الحالية أعلى من متوسط آخر 5 دقايق)
                     vol_burst = v_1m[-1] > np.mean(v_1m[-6:-1])
 
-                    # 3. نظام النقاط السريع (مفيش ADX يعطلنا)
-                    # التقييم بيبدأ من 50 + 30 للتقاطع + 20 للسيولة = 100
                     sl_5m = 50 + (30 if fresh_long else 0) + (20 if vol_burst else 0)
                     ss_5m = 50 + (30 if fresh_short else 0) + (20 if vol_burst else 0)
                     
-                    # الفلتر الوحيد اللي ميتنازلش عنه: الاتجاه العام للساعة
-                    if curr_5m < ema20_1h: sl_5m -= 50  # ممنوع الشراء عكس التريند
-                    if curr_5m > ema20_1h: ss_5m -= 50  # ممنوع البيع عكس التريند
+                    if curr_5m < ema20_1h: sl_5m -= 50
+                    if curr_5m > ema20_1h: ss_5m -= 50
                     
-                    # لو التقاطع مش طازج، اقفل التقييم خالص
                     if not fresh_long: sl_5m -= 50
                     if not fresh_short: ss_5m -= 50
                     
                     sl_5m = max(0, sl_5m)
                     ss_5m = max(0, ss_5m)
                     
-                    # الأهداف محكومة بالـ ATR بتاع 5 دقايق عشان تدي مساحة تتنفس
                     buy_sl = curr_5m - (1.5 * atr)
                     buy_tp = curr_5m + (2.5 * atr)
                     sell_sl = curr_5m + (1.5 * atr)
@@ -243,7 +218,7 @@ with tab2:
         st.markdown(f"**{opp['symbol']}** {opp['direction']} ({opp['score']}/100 ⭐️) | الحالي: {opp['price']} | دخول: `{opp['buy']}` | هدف: `{opp['tp']}` | وقف: `{opp['sl']}`")
         if st.button(f"➕ تتبع", key=f"f_{i}_{opp['symbol']}"): track_trade(opp, 'Futures')
 with tab3:
-    st.info("⚡ تم إزالة الفلاتر البطيئة (ADX/SMA). البوت الآن يصطاد الانعكاس اللحظي فوراً (Fresh Crossover + Volume Burst) مع الالتزام باتجاه الساعة.")
+    st.info("⚡ تم إصلاح التطابق الفني. البوت الآن يقرأ الـ EMA تماماً مثل منصة OKX/TradingView لتفادي التقاطعات الوهمية.")
     for i, opp in enumerate(st.session_state.scalping_opps, 1):
         st.markdown(f"**{opp['symbol']}** {opp['direction']} ({opp['score']}/100 ⭐️) | الحالي: {opp['price']} | دخول: `{opp['buy']}` | هدف: `{opp['tp']}` | وقف: `{opp['sl']}`")
         if st.button(f"➕ تتبع", key=f"sc_{i}_{opp['symbol']}"): track_trade(opp, 'Scalping')
@@ -258,5 +233,6 @@ with tab4:
             st.markdown(f"**{t['symbol']}** | {t['type']} | {t['direction']} | {status_icon} **{t['status']}**")
             st.markdown(f"دخول: {t['entry']} | هدف: {t['tp']} | وقف: {t['sl']}")
             st.markdown("---")
+
 
     
