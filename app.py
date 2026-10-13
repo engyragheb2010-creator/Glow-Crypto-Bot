@@ -43,7 +43,7 @@ def calculate_rsi(prices, period=14):
         delta = deltas[i]
         if delta > 0:
             up = (up * (period - 1) + delta) / period
-            down = (down * (period - 1)) / period
+            down = (up * (period - 1)) / period
         else:
             up = (up * (period - 1)) / period
             down = (down * (period - 1) - delta) / period
@@ -71,7 +71,6 @@ def calculate_atr(highs, lows, closes, period=14):
     atr = pd.Series(tr_list).rolling(window=period).mean().iloc[-1]
     return atr if not np.isnan(atr) else (highs[-1] * 0.01)
 
-# مؤشر قوة الاتجاه (ADX) لفلترة التذبذب العرضي
 def calculate_adx(highs, lows, closes, period=14):
     plus_dm = np.diff(highs)
     minus_dm = -np.diff(lows)
@@ -119,7 +118,6 @@ with col1:
                     v = np.array([c[5] for c in ohlcv])
                     curr = c[-1]
                     
-                    # حساب المؤشرات
                     ema5 = calculate_ema_series(c, 5)
                     ema13 = calculate_ema_series(c, 13)
                     macd, macd_signal = calculate_macd(c)
@@ -127,17 +125,13 @@ with col1:
                     atr = calculate_atr(h, l, c, 14)
                     adx = calculate_adx(h, l, c, 14)
                     
-                    # حساب مستويات الدعم والمقاومة البسيطة (Pivot / High-Low Range)
                     recent_high = np.max(h[-20:])
                     recent_low = np.min(l[-20:])
                     
-                    # الشروط الاحترافية
                     long_cross = (ema5.iloc[-2] <= ema13.iloc[-2]) and (ema5.iloc[-1] > ema13.iloc[-1])
                     short_cross = (ema5.iloc[-2] >= ema13.iloc[-2]) and (ema5.iloc[-1] < ema13.iloc[-1])
                     vol_burst = v[-1] > np.mean(v[-6:-1])
                     
-                    # فلتر اتجاه السوق: ADX لازم يكون فوق 20 (يعني فيه تريند مش تذبذب رخم)
-                    # وفلتر الدعم والمقاومة: Long يكون قريب من الدعم، Short يكون قريب من المقاومة
                     near_support = (curr - recent_low) / (recent_high - recent_low) < 0.4 if recent_high != recent_low else True
                     near_resistance = (recent_high - curr) / (recent_high - recent_low) < 0.4 if recent_high != recent_low else True
                     
@@ -182,7 +176,7 @@ with col2:
                                 elif curr <= t['sl']: t['status'] = '🛑 خسارة (Hit SL)'
                             else:
                                 if curr <= t['tp']: t['status'] = '🎯 ربح (Hit TP)'
-                                elif >= t['sl']: t['status'] = '🛑 خسارة (Hit SL)'
+                                elif curr >= t['sl']: t['status'] = '🛑 خسارة (Hit SL)'
                     except: pass
             save_portfolio(st.session_state.tracked_trades)
         st.success("تم التحديث!")
@@ -219,5 +213,3 @@ with tab4:
             st.markdown(f"**{t['symbol']}** | {t['type']} | {t['direction']} | {status_icon} **{t['status']}**")
             st.markdown(f"دخول: {t['entry']} | هدف: {t['tp']} | وقف: {t['sl']}")
             st.markdown("---")
-
-
