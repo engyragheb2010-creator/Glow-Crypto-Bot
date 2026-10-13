@@ -6,8 +6,8 @@ import time
 import json
 import os
 
-st.set_page_config(page_title="Glow Pro Multi-Strategy Bot", page_icon="⚡", layout="wide")
-st.title("⚡ تطبيق التوصيات الذكي (مع حساب نسب القوة الدقيقة)")
+st.set_page_config(page_title="Glow Pro Multi-Target Bot", page_icon="🚀", layout="wide")
+st.title("🚀 تطبيق التوصيات الذكي (بأنظمة الأهداف المتعددة وتأمين الصفقات)")
 
 API_KEY = "41e8e6d1-3d2d-4861-b0df-61ccdb79e34b"
 SECRET_KEY = "1FC2FDF62E1F188458144B7700759BC3" 
@@ -88,16 +88,17 @@ def track_trade(opp, trade_type):
             return
     new_trade = {
         'id': f"{opp['symbol']}_{time.time()}", 'symbol': opp['symbol'], 'type': trade_type,
-        'direction': opp.get('direction', '🟢 LONG'), 'entry': opp['buy'], 'tp': opp['tp'],
-        'sl': opp['sl'], 'status': '⏳ معلقة'
+        'direction': opp.get('direction', '🟢 LONG'), 'entry': opp['buy'], 
+        'tp1': opp['tp1'], 'tp2': opp['tp2'], 'sl': opp['sl'], 
+        'status': '⏳ معلقة', 'secured': False
     }
     st.session_state.tracked_trades.append(new_trade)
     save_portfolio(st.session_state.tracked_trades)
-    st.toast(f"تمت الإضافة بنجاح للمحفظة الدائمة!")
+    st.toast(f"تمت الإضافة بنجاح مع أهداف متعددة!")
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.success("🤖 المراقبة التلقائية تعمل في الخلفية للسكالبينج والتريند مع حساب نسب الثقة.")
+    st.success("🤖 المراقبة تعمل مع نظام الأهداف المتعددة (TP1 / TP2) وحماية الدخول.")
     
     symbols = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT']
     scalp_opps = []
@@ -105,7 +106,7 @@ with col1:
     
     for symbol in symbols:
         try:
-            # 1. فحص الاسكالبينج (فريم 5 دقائق)
+            # 1. فحص الاسكالبينج (5 دقائق)
             ohlcv_5m = exchange.fetch_ohlcv(symbol, '5m', limit=150)
             h5 = np.array([c[2] for c in ohlcv_5m])
             l5 = np.array([c[3] for c in ohlcv_5m])
@@ -122,20 +123,19 @@ with col1:
             short_cross_5 = (ema20_5.iloc[-2] >= ema50_5.iloc[-2]) and (ema20_5.iloc[-1] < ema50_5.iloc[-1])
             
             if long_cross_5 and macd_5 > macds_5 and rsi_5 > 50:
-                # حساب نسبة تقييم ذكية بناءً على قوة مسافة RSI والفرق بين MACD والخط الإشاري
                 score = min(98, int(85 + (rsi_5 - 50) * 0.3 + abs(macd_5 - macds_5) * 10))
                 scalp_opps.append({
                     'symbol': symbol, 'direction': '🟢 LONG (Scalp)', 'price': curr, 'score': score,
-                    'buy': round(curr, 4), 'tp': round(curr + (2.0 * atr_5), 4), 'sl': round(curr - (1.0 * atr_5), 4)
+                    'buy': round(curr, 4), 'tp1': round(curr + (1.2 * atr_5), 4), 'tp2': round(curr + (2.5 * atr_5), 4), 'sl': round(curr - (1.0 * atr_5), 4)
                 })
             elif short_cross_5 and macd_5 < macds_5 and rsi_5 < 50:
                 score = min(98, int(85 + (50 - rsi_5) * 0.3 + abs(macd_5 - macds_5) * 10))
                 scalp_opps.append({
                     'symbol': symbol, 'direction': '🔴 SHORT (Scalp)', 'price': curr, 'score': score,
-                    'buy': round(curr, 4), 'tp': round(curr - (2.0 * atr_5), 4), 'sl': round(curr + (1.0 * atr_5), 4)
+                    'buy': round(curr, 4), 'tp1': round(curr - (1.2 * atr_5), 4), 'tp2': round(curr - (2.5 * atr_5), 4), 'sl': round(curr + (1.0 * atr_5), 4)
                 })
                 
-            # 2. فحص استراتيجية تتبع الاتجاه Trend (فريم 15 دقيقة)
+            # 2. فحص التريند (15 دقيقة) مع أهداف أوسع
             ohlcv_15m = exchange.fetch_ohlcv(symbol, '15m', limit=100)
             h15 = np.array([c[2] for c in ohlcv_15m])
             l15 = np.array([c[3] for c in ohlcv_15m])
@@ -146,18 +146,17 @@ with col1:
             ema200_15 = calculate_ema_series(c15, 200)
             atr_15 = calculate_atr(h15, l15, c15, 14)
             
-            # تقييم قوة التريند بناءً على مدى بُعد السعر والمتوسطات عن بعضها
             if curr_15 > ema50_15.iloc[-1] and ema50_15.iloc[-1] > ema200_15.iloc[-1]:
                 trend_strength = min(99, int(90 + ((curr_15 - ema50_15.iloc[-1]) / curr_15) * 100))
                 trend_opps.append({
                     'symbol': symbol, 'direction': '📈 LONG (Trend 15m)', 'price': curr_15, 'score': trend_strength,
-                    'buy': round(curr_15, 4), 'tp': round(curr_15 + (3.0 * atr_15), 4), 'sl': round(curr_15 - (1.5 * atr_15), 4)
+                    'buy': round(curr_15, 4), 'tp1': round(curr_15 + (1.8 * atr_15), 4), 'tp2': round(curr_15 + (3.5 * atr_15), 4), 'sl': round(curr_15 - (1.2 * atr_15), 4)
                 })
             elif curr_15 < ema50_15.iloc[-1] and ema50_15.iloc[-1] < ema200_15.iloc[-1]:
                 trend_strength = min(99, int(90 + ((ema50_15.iloc[-1] - curr_15) / curr_15) * 100))
                 trend_opps.append({
                     'symbol': symbol, 'direction': '📉 SHORT (Trend 15m)', 'price': curr_15, 'score': trend_strength,
-                    'buy': round(curr_15, 4), 'tp': round(curr_15 - (3.0 * atr_15), 4), 'sl': round(curr_15 + (1.5 * atr_15), 4)
+                    'buy': round(curr_15, 4), 'tp1': round(curr_15 - (1.8 * atr_15), 4), 'tp2': round(curr_15 - (3.5 * atr_15), 4), 'sl': round(curr_15 + (1.2 * atr_15), 4)
                 })
         except: continue
             
@@ -171,27 +170,47 @@ with col2:
     if st.button('🔄 تحديث المحفظة يدوي'):
         with st.spinner('تحديث...'):
             for t in st.session_state.tracked_trades:
-                if t['status'] in ['⏳ معلقة', '🟢 نشطة']:
+                if t['status'] in ['⏳ معلقة', '🟢 نشطة', '🎯 تم تحقيق TP1 (مؤمنة)']:
                     try:
                         ticker = exchange.fetch_ticker(t['symbol'])
                         curr = ticker['last']
                         is_long = 'LONG' in t['direction']
+                        
+                        # تفعيل الصفقة المعلقة
                         if t['status'] == '⏳ معلقة':
-                            if (is_long and curr <= t['entry']) or (not is_long and curr >= t['entry']): t['status'] = '🟢 نشطة'
-                        if t['status'] == '🟢 نشطة':
+                            if (is_long and curr <= t['entry']) or (not is_long and curr >= t['entry']): 
+                                t['status'] = '🟢 نشطة'
+                        
+                        # متابعة الصفقة النشطة وتحقيق الأهداف
+                        if t['status'] in ['🟢 نشطة', '🎯 تم تحقيق TP1 (مؤمنة)']:
                             if is_long:
-                                if curr >= t['tp']: t['status'] = '🎯 ربح (Hit TP)'
-                                elif curr <= t['sl']: t['status'] = '🛑 خسارة (Hit SL)'
-                            else:
-                                if curr <= t['tp']: t['status'] = '🎯 ربح (Hit TP)'
-                                elif curr >= t['sl']: t['status'] = '🛑 خسارة (Hit SL)'
+                                # تحقق من الهدف الأول TP1
+                                if curr >= t['tp1'] and t['status'] == '🟢 نشطة':
+                                    t['status'] = '🎯 تم تحقيق TP1 (مؤمنة)'
+                                    t['sl'] = t['entry']  # تحريك الوقف لنقطة الدخول لحماية الأرباح
+                                    t['secured'] = True
+                                # تحقق من الهدف الثاني TP2
+                                elif curr >= t['tp2']: 
+                                    t['status'] = '🎯 ربح كامل (Hit TP2)'
+                                # تحقق من وقف الخسارة SL
+                                elif curr <= t['sl']: 
+                                    t['status'] = '🛑 خسارة (Hit SL)' if not t.secured else '🛡️ خروج بربح TP1 (بعد تأمين الوقف)'
+                            else: # Short
+                                if curr <= t['tp1'] and t['status'] == '🟢 نشطة':
+                                    t['status'] = '🎯 تم تحقيق TP1 (مؤمنة)'
+                                    t['sl'] = t['entry']
+                                    t['secured'] = True
+                                elif curr <= t['tp2']: 
+                                    t['status'] = '🎯 ربح كامل (Hit TP2)'
+                                elif curr >= t['sl']: 
+                                    t['status'] = '🛑 خسارة (Hit SL)' if not t.secured else '🛡️ خروج بربح TP1 (بعد تأمين الوقف)'
                     except: pass
             save_portfolio(st.session_state.tracked_trades)
         st.success("تم التحديث!")
         
     st.markdown("---")
     if st.button('🧹 مسح الصفقات المغلقة'):
-        st.session_state.tracked_trades = [t for t in st.session_state.tracked_trades if t['status'] not in ['🎯 ربح (Hit TP)', '🛑 خسارة (Hit SL)']]
+        st.session_state.tracked_trades = [t for t in st.session_state.tracked_trades if not any(w in t['status'] for w in ['ربح كامل', 'خسارة', 'خروج بربح'])]
         save_portfolio(st.session_state.tracked_trades)
         st.success("تم تنظيف المحفظة!")
         
@@ -203,21 +222,21 @@ with col2:
 tab3, tab_trend, tab4 = st.tabs(["⏱️ Scalping (5m)", "🌊 Trend Following (15m)", "💼 محفظتي (دائمة)"])
 
 with tab3:
-    st.info("⏱️ إشارات السكالبينج السريعة مع تقييم القوة بدقة.")
+    st.info("⏱️ صفقات السكالبينج مع هدفين (TP1 / TP2).")
     if not st.session_state.scalping_opps:
-        st.warning("جاري فحص صفقات السكالبينج اللحظية..")
+        st.warning("جاري البحث عن فرص سكالبينج دقيقة..")
     else:
         for i, opp in enumerate(st.session_state.scalping_opps, 1):
-            st.markdown(f"**{opp['symbol']}** | {opp['direction']} (تقييم: **{opp['score']}% ⭐️**) | السعر: {opp['price']} | هدف: `{opp['tp']}` | وقف: `{opp['sl']}`")
+            st.markdown(f"**{opp['symbol']}** | {opp['direction']} ({opp['score']}% ⭐️) | دخول: {opp['price']} | TP1: `{opp['tp1']}` | TP2: `{opp['tp2']}` | وقف: `{opp['sl']}`")
             if st.button(f"➕ تتبع اسكالبينج", key=f"sc_{i}_{opp['symbol']}"): track_trade(opp, 'Scalping')
 
 with tab_trend:
-    st.info("🌊 صفقات تتبع الاتجاه مع حساب نسبة قوة التريند.")
+    st.info("🌊 صفقات تتبع الاتجاه مع أهداف متعددة وتأمين الوقف.")
     if not st.session_state.trend_opps:
-        st.warning("جاري البحث عن تريندات قوية واضحة..")
+        st.warning("جاري البحث عن تريندات واضحة..")
     else:
         for i, opp in enumerate(st.session_state.trend_opps, 1):
-            st.markdown(f"**{opp['symbol']}** | {opp['direction']} (قوة التريند: **{opp['score']}% 🚀**) | السعر: {opp['price']} | هدف: `{opp['tp']}` | وقف: `{opp['sl']}`")
+            st.markdown(f"**{opp['symbol']}** | {opp['direction']} ({opp['score']}% 🚀) | دخول: {opp['price']} | TP1: `{opp['tp1']}` | TP2: `{opp['tp2']}` | وقف: `{opp['sl']}`")
             if st.button(f"➕ تتبع تريند", key=f"tr_{i}_{opp['symbol']}"): track_trade(opp, 'Trend')
 
 with tab4:
@@ -226,14 +245,18 @@ with tab4:
         for t in reversed(st.session_state.tracked_trades):
             status_icon = "⚪"
             if "نشطة" in t['status']: status_icon = "🟢"
-            elif "ربح" in t['status']: status_icon = "🎯"
+            elif "TP1" in t['status']: status_icon = "🎯"
+            elif "ربح كامل" in t['status']: status_icon = "🏆"
             elif "خسارة" in t['status']: status_icon = "🛑"
+            elif "حماية" in t['status'] or "بربح" in t['status']: status_icon = "🛡️"
+            
             st.markdown(f"**{t['symbol']}** | نوع: {t['type']} | {t['direction']} | {status_icon} **{t['status']}**")
-            st.markdown(f"دخول: {t['entry']} | هدف: {t['tp']} | وقف: {t['sl']}")
+            st.markdown(f"دخول: {t['entry']} | TP1: {t['tp1']} | TP2: {t['tp2']} | وقف: {t['sl']}")
             st.markdown("---")
 
 time.sleep(60)
 st.rerun()
+
 
 
 
