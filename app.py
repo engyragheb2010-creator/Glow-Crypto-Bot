@@ -6,8 +6,8 @@ import time
 import json
 import os
 
-st.set_page_config(page_title="Glow Pro Matching Bot", page_icon="🎯", layout="wide")
-st.title("🎯 تطبيق التوصيات (نسخة مطابقة الشارت: EMA 20 & EMA 50)")
+st.set_page_config(page_title="Glow Pro Auto Bot", page_icon="🤖", layout="wide")
+st.title("🤖 تطبيق التوصيات التلقائي (يعمل أوتوماتيك كل دقيقة)")
 
 API_KEY = "41e8e6d1-3d2d-4861-b0df-61ccdb79e34b"
 SECRET_KEY = "1FC2FDF62E1F188458144B7700759BC3" 
@@ -31,6 +31,7 @@ def save_portfolio(trades):
 
 if 'scalping_opps' not in st.session_state: st.session_state.scalping_opps = []
 if 'tracked_trades' not in st.session_state: st.session_state.tracked_trades = load_portfolio()
+if 'auto_scan' not in st.session_state: st.session_state.auto_scan = True
 
 def calculate_macd(prices):
     exp1 = pd.Series(prices).ewm(span=12, adjust=False).mean()
@@ -76,57 +77,58 @@ def track_trade(opp, trade_type):
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    if st.button('🎯 فحص السوق (EMA 20 & 50)'):
-        with st.spinner('جاري فحص العملات باستخدام متوسطات الشارت الحقيقية (20 و 50) على فريم 5 دقائق...'):
-            symbols = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT']
-            all_opps = []
+    st.success("🤖 المراقبة التلقائية مفعلة: البوت يفحص السوق ويحدث نفسه كل دقيقة لوحده تماماً!")
+    
+    # عملية الفحص التلقائي مباشرة
+    symbols = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT']
+    all_opps = []
+    
+    for symbol in symbols:
+        try:
+            ohlcv = exchange.fetch_ohlcv(symbol, '5m', limit=150)
+            h = np.array([c[2] for c in ohlcv])
+            l = np.array([c[3] for c in ohlcv])
+            c = np.array([c[4] for c in ohlcv])
+            curr = c[-1]
             
-            for symbol in symbols:
-                try:
-                    ohlcv = exchange.fetch_ohlcv(symbol, '5m', limit=150)
-                    h = np.array([c[2] for c in ohlcv])
-                    l = np.array([c[3] for c in ohlcv])
-                    c = np.array([c[4] for c in ohlcv])
-                    curr = c[-1]
-                    
-                    # استخدام متوسطات المنصة الحقيقية (20 و 50)
-                    ema20 = calculate_ema_series(c, 20)
-                    ema50 = calculate_ema_series(c, 50)
-                    macd, macd_signal = calculate_macd(c)
-                    atr = calculate_atr(h, l, c, 14)
-                    
-                    # تقاطع EMA 20 مع EMA 50
-                    long_cross = (ema20.iloc[-2] <= ema50.iloc[-2]) and (ema20.iloc[-1] > ema50.iloc[-1])
-                    short_cross = (ema20.iloc[-2] >= ema50.iloc[-2]) and (ema20.iloc[-1] < ema50.iloc[-1])
-                    
-                    score = 0
-                    direction = ""
-                    
-                    if long_cross and macd > macd_signal:
-                        score = 95
-                        direction = '🟢 LONG (EMA 20/50)'
-                        tp = curr + (2.0 * atr)
-                        sl = curr - (1.0 * atr)
-                    elif short_cross and macd < macd_signal:
-                        score = 95
-                        direction = '🔴 SHORT (EMA 20/50)'
-                        tp = curr - (2.0 * atr)
-                        sl = curr + (1.0 * atr)
-                    else:
-                        continue
-                        
-                    all_opps.append({
-                        'symbol': symbol, 'direction': direction, 'price': curr, 'score': score,
-                        'buy': round(curr, 4), 'tp': round(tp, 4), 'sl': round(sl, 4)
-                    })
-                except: continue
-                    
-            st.session_state.scalping_opps = all_opps
-            if all_opps:
-                play_audio_alert()
+            ema20 = calculate_ema_series(c, 20)
+            ema50 = calculate_ema_series(c, 50)
+            macd, macd_signal = calculate_macd(c)
+            atr = calculate_atr(h, l, c, 14)
+            
+            long_cross = (ema20.iloc[-2] <= ema50.iloc[-2]) and (ema20.iloc[-1] > ema50.iloc[-1])
+            short_cross = (ema20.iloc[-2] >= ema50.iloc[-2]) and (ema20.iloc[-1] < ema50.iloc[-1])
+            
+            score = 0
+            direction = ""
+            
+            if long_cross and macd > macd_signal:
+                score = 95
+                direction = '🟢 LONG (EMA 20/50)'
+                tp = curr + (2.0 * atr)
+                sl = curr - (1.0 * atr)
+            elif short_cross and macd < macd_signal:
+                score = 95
+                direction = '🔴 SHORT (EMA 20/50)'
+                tp = curr - (2.0 * atr)
+                sl = curr + (1.0 * atr)
+            else:
+                continue
+                
+            all_opps.append({
+                'symbol': symbol, 'direction': direction, 'price': curr, 'score': score,
+                'buy': round(curr, 4), 'tp': round(tp, 4), 'sl': round(sl, 4)
+            })
+        except: continue
+            
+    # لو فيه صفقات جديدة والوضع تغير، نبهنا بصوت
+    if all_opps and len(all_opps) != len(st.session_state.scalping_opps):
+        play_audio_alert()
+        
+    st.session_state.scalping_opps = all_opps
 
 with col2:
-    if st.button('🔄 تحديث المحفظة'):
+    if st.button('🔄 تحديث المحفظة يدوي'):
         with st.spinner('تحديث...'):
             for t in st.session_state.tracked_trades:
                 if t['status'] in ['⏳ معلقة', '🟢 نشطة']:
@@ -158,12 +160,12 @@ with col2:
         save_portfolio([])
         st.success("تم مسح كل الصفقات!")
 
-tab3, tab4 = tab3, tab4 = st.tabs(["⏱️ Scalping (متوسطات الشارت)", "💼 محفظتي (دائمة)"])
+tab3, tab4 = st.tabs(["⏱️ Scalping (البوت التلقائي)", "💼 محفظتي (دائمة)"])
 
 with tab3:
-    st.info("🎯 البوت يقرأ الآن من نفس متوسطات شاشتك (EMA 20 و 50) على فريم الـ 5 دقائق لتتطابق الرؤية تماماً.")
+    st.info("🔄 هذه الصفحة تحدث نفسها كلياً وتفحص السوق أوتوماتيكياً كل 60 ثانية باستخدام متوسطات الشارت (EMA 20 و 50).")
     if not st.session_state.scalping_opps:
-        st.warning("لا توجد تقاطعات مطابقة لمتوسطات الشارت حالياً.")
+        st.warning("البوت يبحث الآن في الخلفية.. جاري المراقبة التلقائية للعملات الأربعة.")
     else:
         for i, opp in enumerate(st.session_state.scalping_opps, 1):
             st.markdown(f"**{opp['symbol']}** {opp['direction']} (تقييم: {opp['score']}/100 ⭐️) | السعر: {opp['price']} | هدف: `{opp['tp']}` | وقف: `{opp['sl']}`")
@@ -179,3 +181,7 @@ with tab4:
             st.markdown(f"**{t['symbol']}** | {t['type']} | {t['direction']} | {status_icon} **{t['status']}**")
             st.markdown(f"دخول: {t['entry']} | هدف: {t['tp']} | وقف: {t['sl']}")
             st.markdown("---")
+
+# إعادة تحميل الصفحة أوتوماتيكياً كل 60 ثانية ليعمل البوت بشكل دائم
+time.sleep(60)
+st.rerun()
