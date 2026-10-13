@@ -135,7 +135,7 @@ with col1:
                     'buy': round(curr, 4), 'tp1': round(curr - (1.2 * atr_5), 4), 'tp2': round(curr - (2.5 * atr_5), 4), 'sl': round(curr + (1.0 * atr_5), 4)
                 })
                 
-            # 2. فحص التريند (15 دقيقة) مع أهداف أوسع
+            # 2. فحص التريند (15 دقيقة)
             ohlcv_15m = exchange.fetch_ohlcv(symbol, '15m', limit=100)
             h15 = np.array([c[2] for c in ohlcv_15m])
             l15 = np.array([c[3] for c in ohlcv_15m])
@@ -176,34 +176,32 @@ with col2:
                         curr = ticker['last']
                         is_long = 'LONG' in t['direction']
                         
-                        # تفعيل الصفقة المعلقة
+                        tp1 = t.get('tp1', t.get('tp', 0))
+                        tp2 = t.get('tp2', t.get('tp', 0))
+                        
                         if t['status'] == '⏳ معلقة':
                             if (is_long and curr <= t['entry']) or (not is_long and curr >= t['entry']): 
                                 t['status'] = '🟢 نشطة'
                         
-                        # متابعة الصفقة النشطة وتحقيق الأهداف
                         if t['status'] in ['🟢 نشطة', '🎯 تم تحقيق TP1 (مؤمنة)']:
                             if is_long:
-                                # تحقق من الهدف الأول TP1
-                                if curr >= t['tp1'] and t['status'] == '🟢 نشطة':
-                                    t['status'] = '🎯 تم تحقيق TP1 (مؤمنة)'
-                                    t['sl'] = t['entry']  # تحريك الوقف لنقطة الدخول لحماية الأرباح
-                                    t['secured'] = True
-                                # تحقق من الهدف الثاني TP2
-                                elif curr >= t['tp2']: 
-                                    t['status'] = '🎯 ربح كامل (Hit TP2)'
-                                # تحقق من وقف الخسارة SL
-                                elif curr <= t['sl']: 
-                                    t['status'] = '🛑 خسارة (Hit SL)' if not t.secured else '🛡️ خروج بربح TP1 (بعد تأمين الوقف)'
-                            else: # Short
-                                if curr <= t['tp1'] and t['status'] == '🟢 نشطة':
+                                if curr >= tp1 and t['status'] == '🟢 نشطة':
                                     t['status'] = '🎯 تم تحقيق TP1 (مؤمنة)'
                                     t['sl'] = t['entry']
                                     t['secured'] = True
-                                elif curr <= t['tp2']: 
+                                elif curr >= tp2: 
+                                    t['status'] = '🎯 ربح كامل (Hit TP2)'
+                                elif curr <= t['sl']: 
+                                    t['status'] = '🛑 خسارة (Hit SL)' if not t.get('secured', False) else '🛡️ خروج بربح TP1 (بعد تأمين الوقف)'
+                            else:
+                                if curr <= tp1 and t['status'] == '🟢 نشطة':
+                                    t['status'] = '🎯 تم تحقيق TP1 (مؤمنة)'
+                                    t['sl'] = t['entry']
+                                    t['secured'] = True
+                                elif curr <= tp2: 
                                     t['status'] = '🎯 ربح كامل (Hit TP2)'
                                 elif curr >= t['sl']: 
-                                    t['status'] = '🛑 خسارة (Hit SL)' if not t.secured else '🛡️ خروج بربح TP1 (بعد تأمين الوقف)'
+                                    t['status'] = '🛑 خسارة (Hit SL)' if not t.get('secured', False) else '🛡️ خروج بربح TP1 (بعد تأمين الوقف)'
                     except: pass
             save_portfolio(st.session_state.tracked_trades)
         st.success("تم التحديث!")
@@ -250,13 +248,12 @@ with tab4:
             elif "خسارة" in t['status']: status_icon = "🛑"
             elif "حماية" in t['status'] or "بربح" in t['status']: status_icon = "🛡️"
             
+            tp1_val = t.get('tp1', t.get('tp', 0))
+            tp2_val = t.get('tp2', t.get('tp', 0))
+            
             st.markdown(f"**{t['symbol']}** | نوع: {t['type']} | {t['direction']} | {status_icon} **{t['status']}**")
-            st.markdown(f"دخول: {t['entry']} | TP1: {t['tp1']} | TP2: {t['tp2']} | وقف: {t['sl']}")
+            st.markdown(f"دخول: {t['entry']} | TP1: {tp1_val} | TP2: {tp2_val} | وقف: {t['sl']}")
             st.markdown("---")
 
 time.sleep(60)
 st.rerun()
-
-
-
-
