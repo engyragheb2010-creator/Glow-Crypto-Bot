@@ -7,7 +7,7 @@ import json
 import os
 
 st.set_page_config(page_title="Glow Pro Bot", page_icon="📈", layout="wide")
-st.title("📈 تطبيق التوصيات الاحترافي (نسخة العرض الفوري السريع)")
+st.title("📈 تطبيق التوصيات الاحترافي (استراتيجية المؤشرات الخمسة المتقدمة)")
 
 API_KEY = "41e8e6d1-3d2d-4861-b0df-61ccdb79e34b"
 SECRET_KEY = "1FC2FDF62E1F188458144B7700759BC3" 
@@ -47,7 +47,8 @@ def calculate_rsi(prices, period=14):
         else:
             up = (up * (period - 1)) / period
             down = (down * (period - 1) - delta) / period
-            rs = 100. - (100. / (1. + rs))
+            rs = up / down if down != 0 else 0
+            rsi = 100. - (100. / (1. + rs))
     return rsi
 
 def calculate_macd(prices):
@@ -56,10 +57,6 @@ def calculate_macd(prices):
     macd = exp1 - exp2
     signal = macd.ewm(span=9, adjust=False).mean()
     return macd.iloc[-1], signal.iloc[-1]
-
-def calculate_vwap(highs, lows, closes, volumes):
-    typical_price = (highs + lows + closes) / 3
-    return np.sum(typical_price * volumes) / np.sum(volumes)
 
 def calculate_ema_series(prices, period):
     return pd.Series(prices).ewm(span=period, adjust=False).mean()
@@ -90,46 +87,59 @@ def track_trade(opp, trade_type):
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    if st.button('🔍 فحص السوق السريع'):
-        with st.spinner('جاري الفحص...'):
-            symbols = ['SOL/USDT', 'DOGE/USDT', 'BTC/USDT', 'ETH/USDT', 'XRP/USDT', 'LTC/USDT']
-            
+    if st.button('🔍 فحص السوق بالاستراتيجية المتقدمة'):
+        with st.spinner('جاري فحص المؤشرات الخمسة (EMA, MACD, RSI, Vol, ATR)...'):
+            symbols = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT']
             all_opps = []
+            
             for symbol in symbols:
                 try:
-                    # سحب 200 شمعة فريم الدقيقة للسرعة والدقة
-                    ohlcv_1m = exchange.fetch_ohlcv(symbol, '1m', limit=200)
-                    h_1m = np.array([c[2] for c in ohlcv_1m])
-                    l_1m = np.array([c[3] for c in ohlcv_1m])
-                    c_1m = np.array([c[4] for c in ohlcv_1m])
-                    v_1m = np.array([c[5] for c in ohlcv_1m])
-                    curr = c_1m[-1]
+                    ohlcv = exchange.fetch_ohlcv(symbol, '1m', limit=200)
+                    h = np.array([c[2] for c in ohlcv])
+                    l = np.array([c[3] for c in ohlcv])
+                    c = np.array([c[4] for c in ohlcv])
+                    v = np.array([c[5] for c in ohlcv])
+                    curr = c[-1]
                     
-                    ema5 = calculate_ema_series(c_1m, 5)
-                    ema13 = calculate_ema_series(c_1m, 13)
-                    atr = calculate_atr(h_1m, l_1m, c_1m, 14)
+                    # 1. حساب مؤشرات الاستراتيجية
+                    ema5 = calculate_ema_series(c, 5)
+                    ema13 = calculate_ema_series(c, 13)
+                    macd, macd_signal = calculate_macd(c)
+                    rsi = calculate_rsi(c)
+                    atr = calculate_atr(h, l, c, 14)
                     
-                    # فحص التقاطع الحالي
-                    is_long = ema5.iloc[-1] > ema13.iloc[-1]
-                    fresh_cross = (ema5.iloc[-2] <= ema13.iloc[-2]) and is_long if is_long else (ema5.iloc[-2] >= ema13.iloc[-2]) and not is_long
+                    # 2. الشروط الصارمة
+                    # التقاطع
+                    long_cross = (ema5.iloc[-2] <= ema13.iloc[-2]) and (ema5.iloc[-1] > ema13.iloc[-1])
+                    short_cross = (ema5.iloc[-2] >= ema13.iloc[-2]) and (ema5.iloc[-1] < ema13.iloc[-1])
                     
-                    score = 50
-                    if fresh_cross: score += 30
-                    if v_1m[-1] > np.mean(v_1m[-6:-1]): score += 20
+                    # الفوليوم
+                    vol_burst = v[-1] > np.mean(v[-6:-1])
                     
-                    direction = '🟢 LONG سريع' if is_long else '🔴 SHORT سريع'
-                    buy_price = curr
-                    tp = curr + (2.0 * atr) if is_long else curr - (2.0 * atr)
-                    sl = curr - (1.0 * atr) if is_long else curr + (1.0 * atr)
+                    score = 0
+                    direction = ""
                     
+                    if long_cross and macd > macd_signal and rsi < 65 and vol_burst:
+                        score = 100
+                        direction = '🟢 LONG متقدم'
+                        tp = curr + (2.0 * atr)
+                        sl = curr - (1.0 * atr)
+                    elif short_cross and macd < macd_signal and rsi > 35 and vol_burst:
+                        score = 100
+                        direction = '🔴 SHORT متقدم'
+                        tp = curr - (2.0 * atr)
+                        sl = curr + (1.0 * atr)
+                    else:
+                        # لو الشروط مش كاملة، بنديها تقييم ضعيف عشان نتأكد إن البوت مبيجيبش غير الصفقات المكتملة فقط
+                        continue
+                        
                     all_opps.append({
                         'symbol': symbol, 'direction': direction, 'price': curr, 'score': score,
-                        'buy': round(buy_price, 4), 'tp': round(tp, 4), 'sl': round(sl, 4)
+                        'buy': round(curr, 4), 'tp': round(tp, 4), 'sl': round(sl, 4)
                     })
                 except: continue
                     
-            if all_opps:
-                st.session_state.scalping_opps = sorted(all_opps, key=lambda x: x['score'], reverse=True)
+            st.session_state.scalping_opps = all_opps
 
 with col2:
     if st.button('🔄 تحديث المحفظة'):
@@ -164,12 +174,12 @@ with col2:
         save_portfolio([])
         st.success("تم مسح كل الصفقات!")
 
-tab3, tab4 = st.tabs(["⏱️ Scalping (الفحص المباشر)", "💼 محفظتي (دائمة)"])
+tab3, tab4 = st.tabs(["⏱️ Scalping (استراتيجية 5 مؤشرات)", "💼 محفظتي (دائمة)"])
 
 with tab3:
-    st.info("⚡ البوت يعرض الآن حالة السوق والعملات فوراً مع تقييماتها المباشرة لتجنب الشاشات الفارغة.")
+    st.info("⚙️ البوت الآن لا يظهر أي صفقة إلا إذا توافقت مؤشرات الـ (EMA + MACD + RSI + Volume + ATR) معاً بشكل كامل وصارم.")
     if not st.session_state.scalping_opps:
-        st.warning("اضغط على زر (فحص السوق السريع) أعلاه لجلب البيانات فوراً.")
+        st.warning("لا توجد صفقات مطابقة لشروط المؤشرات الخمسة حالياً. (اضغط فحص مرة أخرى لاحقاً حتى تكتمل الشروط).")
     else:
         for i, opp in enumerate(st.session_state.scalping_opps, 1):
             st.markdown(f"**{opp['symbol']}** {opp['direction']} (تقييم: {opp['score']}/100 ⭐️) | السعر: {opp['price']} | هدف: `{opp['tp']}` | وقف: `{opp['sl']}`")
@@ -185,3 +195,4 @@ with tab4:
             st.markdown(f"**{t['symbol']}** | {t['type']} | {t['direction']} | {status_icon} **{t['status']}**")
             st.markdown(f"دخول: {t['entry']} | هدف: {t['tp']} | وقف: {t['sl']}")
             st.markdown("---")
+
