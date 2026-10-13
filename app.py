@@ -136,8 +136,8 @@ with col1:
                 scalp_opps.append({
                     'symbol': symbol, 'direction': '🟢 LONG (Scalp)', 'price': curr, 'score': score,
                     'buy': round(curr, dec), 
-                    'tp1': round(curr * 1.006, dec),  # هدف أول 0.6%
-                    'tp2': round(curr * 1.015, dec),  # هدف ثاني 1.5%
+                    'tp1': round(curr * 1.006, dec), 
+                    'tp2': round(curr * 1.015, dec), 
                     'sl': round(curr - (1.0 * atr_5), dec)
                 })
             elif short_cross_5 and macd_5 < macds_5 and rsi_5 < 50:
@@ -145,12 +145,12 @@ with col1:
                 scalp_opps.append({
                     'symbol': symbol, 'direction': '🔴 SHORT (Scalp)', 'price': curr, 'score': score,
                     'buy': round(curr, dec), 
-                    'tp1': round(curr * 0.994, dec),  # هدف أول هبوط 0.6%
-                    'tp2': round(curr * 0.985, dec),  # هدف ثاني هبوط 1.5%
+                    'tp1': round(curr * 0.994, dec), 
+                    'tp2': round(curr * 0.985, dec), 
                     'sl': round(curr + (1.0 * atr_5), dec)
                 })
                 
-            # 2. فحص التريند (15 دقيقة) - مسافات أوسع ومتباينة بوضوح
+            # 2. فحص التريند (15 دقيقة)
             ohlcv_15m = exchange.fetch_ohlcv(symbol, '15m', limit=100)
             h15 = np.array([c[2] for c in ohlcv_15m])
             l15 = np.array([c[3] for c in ohlcv_15m])
@@ -166,8 +166,8 @@ with col1:
                 trend_opps.append({
                     'symbol': symbol, 'direction': '📈 LONG (Trend 15m)', 'price': curr_15, 'score': trend_strength,
                     'buy': round(curr_15, dec), 
-                    'tp1': round(curr_15 * 1.012, dec), # هدف أول للتريند 1.2%
-                    'tp2': round(curr_15 * 1.028, dec), # هدف ثاني للتريند 2.8%
+                    'tp1': round(curr_15 * 1.012, dec), 
+                    'tp2': round(curr_15 * 1.028, dec), 
                     'sl': round(curr_15 - (1.2 * atr_15), dec)
                 })
             elif curr_15 < ema50_15.iloc[-1] and ema50_15.iloc[-1] < ema200_15.iloc[-1]:
@@ -175,8 +175,8 @@ with col1:
                 trend_opps.append({
                     'symbol': symbol, 'direction': '📉 SHORT (Trend 15m)', 'price': curr_15, 'score': trend_strength,
                     'buy': round(curr_15, dec), 
-                    'tp1': round(curr_15 * 0.988, dec), # هدف أول هبوط للتريند 1.2%
-                    'tp2': round(curr_15 * 0.972, dec), # هدف ثاني هبوط للتريند 2.8%
+                    'tp1': round(curr_15 * 0.988, dec), 
+                    'tp2': round(curr_15 * 0.972, dec), 
                     'sl': round(curr_15 + (1.2 * atr_15), dec)
                 })
         except: continue
@@ -276,6 +276,7 @@ with tab4:
             st.markdown(f"دخول: {t['entry']} | TP1: {tp1_val} | TP2: {tp2_val} | وقف: {t['sl']}")
             st.markdown("---")
 
-time.sleep60)
+time.sleep(60)
 st.rerun()
+
 
