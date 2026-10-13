@@ -6,8 +6,8 @@ import time
 import json
 import os
 
-st.set_page_config(page_title="Glow Pro Auto Bot", page_icon="🤖", layout="wide")
-st.title("🤖 تطبيق التوصيات التلقائي (يعمل أوتوماتيك كل دقيقة)")
+st.set_page_config(page_title="Glow Pro RSI Bot", page_icon="📈", layout="wide")
+st.title("📈 تطبيق التوصيات الذكي (EMA + MACD + RSI)")
 
 API_KEY = "41e8e6d1-3d2d-4861-b0df-61ccdb79e34b"
 SECRET_KEY = "1FC2FDF62E1F188458144B7700759BC3" 
@@ -31,7 +31,25 @@ def save_portfolio(trades):
 
 if 'scalping_opps' not in st.session_state: st.session_state.scalping_opps = []
 if 'tracked_trades' not in st.session_state: st.session_state.tracked_trades = load_portfolio()
-if 'auto_scan' not in st.session_state: st.session_state.auto_scan = True
+
+def calculate_rsi(prices, period=14):
+    deltas = np.diff(prices)
+    seed = deltas[:period+1]
+    up = seed[seed >= 0].sum() / period
+    down = -seed[seed < 0].sum() / period
+    rs = up / down if down != 0 else 0
+    rsi = 100. - (100. / (1. + rs))
+    for i in range(period, len(deltas)):
+        delta = deltas[i]
+        if delta > 0:
+            up = (up * (period - 1) + delta) / period
+            down = (down * (period - 1)) / period
+        else:
+            up = (up * (period - 1)) / period
+            down = (down * (period - 1) - delta) / period
+            rs = up / down if down != 0 else 0
+            rsi = 100. - (100. / (1. + rs))
+    return rsi
 
 def calculate_macd(prices):
     exp1 = pd.Series(prices).ewm(span=12, adjust=False).mean()
@@ -77,9 +95,8 @@ def track_trade(opp, trade_type):
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.success("🤖 المراقبة التلقائية مفعلة: البوت يفحص السوق ويحدث نفسه كل دقيقة لوحده تماماً!")
+    st.success("📈 المراقبة التلقائية مفعلة (EMA 20/50 + MACD + RSI الفلتر الإضافي).")
     
-    # عملية الفحص التلقائي مباشرة
     symbols = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT']
     all_opps = []
     
@@ -94,6 +111,7 @@ with col1:
             ema20 = calculate_ema_series(c, 20)
             ema50 = calculate_ema_series(c, 50)
             macd, macd_signal = calculate_macd(c)
+            rsi = calculate_rsi(c)
             atr = calculate_atr(h, l, c, 14)
             
             long_cross = (ema20.iloc[-2] <= ema50.iloc[-2]) and (ema20.iloc[-1] > ema50.iloc[-1])
@@ -102,14 +120,15 @@ with col1:
             score = 0
             direction = ""
             
-            if long_cross and macd > macd_signal:
-                score = 95
-                direction = '🟢 LONG (EMA 20/50)'
+            # الشروط الثلاثة مجتمعة (تقاطع + MACD + RSI)
+            if long_cross and macd > macd_signal and rsi > 50:
+                score = 98
+                direction = '🟢 LONG (EMA+MACD+RSI)'
                 tp = curr + (2.0 * atr)
                 sl = curr - (1.0 * atr)
-            elif short_cross and macd < macd_signal:
-                score = 95
-                direction = '🔴 SHORT (EMA 20/50)'
+            elif short_cross and macd < macd_signal and rsi < 50:
+                score = 98
+                direction = '🔴 SHORT (EMA+MACD+RSI)'
                 tp = curr - (2.0 * atr)
                 sl = curr + (1.0 * atr)
             else:
@@ -121,7 +140,6 @@ with col1:
             })
         except: continue
             
-    # لو فيه صفقات جديدة والوضع تغير، نبهنا بصوت
     if all_opps and len(all_opps) != len(st.session_state.scalping_opps):
         play_audio_alert()
         
@@ -160,12 +178,12 @@ with col2:
         save_portfolio([])
         st.success("تم مسح كل الصفقات!")
 
-tab3, tab4 = st.tabs(["⏱️ Scalping (البوت التلقائي)", "💼 محفظتي (دائمة)"])
+tab3, tab4 = st.tabs(["⏱️ Scalping (الاستراتيجية المحدثة)", "💼 محفظتي (دائمة)"])
 
 with tab3:
-    st.info("🔄 هذه الصفحة تحدث نفسها كلياً وتفحص السوق أوتوماتيكياً كل 60 ثانية باستخدام متوسطات الشارت (EMA 20 و 50).")
+    st.info("📈 البوت يراقب الآن (EMA 20/50 + MACD + RSI) على فريم الـ 5 دقائق لتصفية أي صفقات معاكسة للاتجاه.")
     if not st.session_state.scalping_opps:
-        st.warning("البوت يبحث الآن في الخلفية.. جاري المراقبة التلقائية للعملات الأربعة.")
+        st.warning("جاري فحص السوق بدقة وفق الشروط الثلاثة الجديدة..")
     else:
         for i, opp in enumerate(st.session_state.scalping_opps, 1):
             st.markdown(f"**{opp['symbol']}** {opp['direction']} (تقييم: {opp['score']}/100 ⭐️) | السعر: {opp['price']} | هدف: `{opp['tp']}` | وقف: `{opp['sl']}`")
@@ -182,6 +200,6 @@ with tab4:
             st.markdown(f"دخول: {t['entry']} | هدف: {t['tp']} | وقف: {t['sl']}")
             st.markdown("---")
 
-# إعادة تحميل الصفحة أوتوماتيكياً كل 60 ثانية ليعمل البوت بشكل دائم
 time.sleep(60)
 st.rerun()
+
