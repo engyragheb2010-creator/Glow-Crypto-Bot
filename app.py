@@ -6,8 +6,8 @@ import time
 import json
 import os
 
-st.set_page_config(page_title="Glow Pro Simple Bot", page_icon="⚡", layout="wide")
-st.title("⚡ تطبيق التوصيات (استراتيجية الثنائي السريع: EMA + MACD)")
+st.set_page_config(page_title="Glow Pro Matching Bot", page_icon="🎯", layout="wide")
+st.title("🎯 تطبيق التوصيات (نسخة مطابقة الشارت: EMA 20 & EMA 50)")
 
 API_KEY = "41e8e6d1-3d2d-4861-b0df-61ccdb79e34b"
 SECRET_KEY = "1FC2FDF62E1F188458144B7700759BC3" 
@@ -76,38 +76,40 @@ def track_trade(opp, trade_type):
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    if st.button('🚀 فحص سريع (EMA + MACD)'):
-        with st.spinner('جاري فحص جميع العملات (BTC, ETH, SOL, DOGE) على فريم 5 دقائق...'):
+    if st.button('🎯 فحص السوق (EMA 20 & 50)'):
+        with st.spinner('جاري فحص العملات باستخدام متوسطات الشارت الحقيقية (20 و 50) على فريم 5 دقائق...'):
             symbols = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT']
             all_opps = []
             
             for symbol in symbols:
                 try:
-                    ohlcv = exchange.fetch_ohlcv(symbol, '5m', limit=100)
+                    ohlcv = exchange.fetch_ohlcv(symbol, '5m', limit=150)
                     h = np.array([c[2] for c in ohlcv])
                     l = np.array([c[3] for c in ohlcv])
                     c = np.array([c[4] for c in ohlcv])
                     curr = c[-1]
                     
-                    ema5 = calculate_ema_series(c, 5)
-                    ema13 = calculate_ema_series(c, 13)
+                    # استخدام متوسطات المنصة الحقيقية (20 و 50)
+                    ema20 = calculate_ema_series(c, 20)
+                    ema50 = calculate_ema_series(c, 50)
                     macd, macd_signal = calculate_macd(c)
                     atr = calculate_atr(h, l, c, 14)
                     
-                    long_cross = (ema5.iloc[-2] <= ema13.iloc[-2]) and (ema5.iloc[-1] > ema13.iloc[-1])
-                    short_cross = (ema5.iloc[-2] >= ema13.iloc[-2]) and (ema5.iloc[-1] < ema13.iloc[-1])
+                    # تقاطع EMA 20 مع EMA 50
+                    long_cross = (ema20.iloc[-2] <= ema50.iloc[-2]) and (ema20.iloc[-1] > ema50.iloc[-1])
+                    short_cross = (ema20.iloc[-2] >= ema50.iloc[-2]) and (ema20.iloc[-1] < ema50.iloc[-1])
                     
                     score = 0
                     direction = ""
                     
                     if long_cross and macd > macd_signal:
-                        score = 90
-                        direction = '🟢 LONG (EMA+MACD)'
+                        score = 95
+                        direction = '🟢 LONG (EMA 20/50)'
                         tp = curr + (2.0 * atr)
                         sl = curr - (1.0 * atr)
                     elif short_cross and macd < macd_signal:
-                        score = 90
-                        direction = '🔴 SHORT (EMA+MACD)'
+                        score = 95
+                        direction = '🔴 SHORT (EMA 20/50)'
                         tp = curr - (2.0 * atr)
                         sl = curr + (1.0 * atr)
                     else:
@@ -156,12 +158,12 @@ with col2:
         save_portfolio([])
         st.success("تم مسح كل الصفقات!")
 
-tab3, tab4 = st.tabs(["⏱️ Scalping (الثنائي السريع)", "💼 محفظتي (دائمة)"])
+tab3, tab4 = tab3, tab4 = st.tabs(["⏱️ Scalping (متوسطات الشارت)", "💼 محفظتي (دائمة)"])
 
 with tab3:
-    st.info("⚡ البوت يفحص الآن العملات الأبعة (BTC, ETH, SOL, DOGE) باستراتيجية (EMA + MACD) على فريم الـ 5 دقائق.")
+    st.info("🎯 البوت يقرأ الآن من نفس متوسطات شاشتك (EMA 20 و 50) على فريم الـ 5 دقائق لتتطابق الرؤية تماماً.")
     if not st.session_state.scalping_opps:
-        st.warning("لا توجد تقاطعات مطابقة حالياً. جاري الفحص..")
+        st.warning("لا توجد تقاطعات مطابقة لمتوسطات الشارت حالياً.")
     else:
         for i, opp in enumerate(st.session_state.scalping_opps, 1):
             st.markdown(f"**{opp['symbol']}** {opp['direction']} (تقييم: {opp['score']}/100 ⭐️) | السعر: {opp['price']} | هدف: `{opp['tp']}` | وقف: `{opp['sl']}`")
@@ -177,5 +179,3 @@ with tab4:
             st.markdown(f"**{t['symbol']}** | {t['type']} | {t['direction']} | {status_icon} **{t['status']}**")
             st.markdown(f"دخول: {t['entry']} | هدف: {t['tp']} | وقف: {t['sl']}")
             st.markdown("---")
-
-
