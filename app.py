@@ -7,7 +7,7 @@ import json
 import os
 
 st.set_page_config(page_title="Glow Pro Master Bot", page_icon="🦅", layout="wide")
-st.title("🦅 تطبيق التوصيات الاحترافي (نسخة القناص المتقدم: التريند والدعم والمقاومة)")
+st.title("🦅 تطبيق التوصيات الاحترافي (نسخة فريم الـ 5 دقائق للفرص المؤكدة)")
 
 API_KEY = "41e8e6d1-3d2d-4861-b0df-61ccdb79e34b"
 SECRET_KEY = "1FC2FDF62E1F188458144B7700759BC3" 
@@ -43,7 +43,7 @@ def calculate_rsi(prices, period=14):
         delta = deltas[i]
         if delta > 0:
             up = (up * (period - 1) + delta) / period
-            down = (up * (period - 1)) / period
+            down = (down * (period - 1)) / period
         else:
             up = (up * (period - 1)) / period
             down = (down * (period - 1) - delta) / period
@@ -88,6 +88,14 @@ def calculate_adx(highs, lows, closes, period=14):
     adx = dx.rolling(window=period).mean().iloc[-1]
     return adx if not np.isnan(adx) else 20
 
+def play_audio_alert():
+    audio_html = """
+        <audio autoplay>
+          <source src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" type="audio/mp3">
+        </audio>
+    """
+    st.markdown(audio_html, unsafe_allow_html=True)
+
 def track_trade(opp, trade_type):
     for t in st.session_state.tracked_trades:
         if t['symbol'] == opp['symbol'] and t['status'] in ['⏳ معلقة', '🟢 نشطة']:
@@ -104,14 +112,15 @@ def track_trade(opp, trade_type):
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    if st.button('🦅 فحص السوق الاستراتيجي المتقدم'):
-        with st.spinner('جاري تحليل الاتجاه (ADX)، الدعم والمقاومة، وباقي المؤشرات...'):
+    if st.button('🦅 فحص السوق على فريم 5 دقائق'):
+        with st.spinner('جاري فحص شمعات الـ 5 دقائق والمؤشرات المتقدمة...'):
             symbols = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT']
             all_opps = []
             
             for symbol in symbols:
                 try:
-                    ohlcv = exchange.fetch_ohlcv(symbol, '1m', limit=200)
+                    # تم التعديل لفريم 5 دقائق (5m) بدلاً من الدقيقة الواحدة
+                    ohlcv = exchange.fetch_ohlcv(symbol, '5m', limit=200)
                     h = np.array([c[2] for c in ohlcv])
                     l = np.array([c[3] for c in ohlcv])
                     c = np.array([c[4] for c in ohlcv])
@@ -140,14 +149,14 @@ with col1:
                     
                     if long_cross and macd > macd_signal and rsi < 65 and vol_burst and adx > 18 and near_support:
                         score = 100
-                        direction = '🟢 LONG قناص'
-                        tp = curr + (2.2 * atr)
-                        sl = curr - (1.1 * atr)
+                        direction = '🟢 LONG قناص 5م'
+                        tp = curr + (2.5 * atr)
+                        sl = curr - (1.2 * atr)
                     elif short_cross and macd < macd_signal and rsi > 35 and vol_burst and adx > 18 and near_resistance:
                         score = 100
-                        direction = '🔴 SHORT قناص'
-                        tp = curr - (2.2 * atr)
-                        sl = curr + (1.1 * atr)
+                        direction = '🔴 SHORT قناص 5م'
+                        tp = curr - (2.5 * atr)
+                        sl = curr + (1.2 * atr)
                     else:
                         continue
                         
@@ -158,6 +167,8 @@ with col1:
                 except: continue
                     
             st.session_state.scalping_opps = all_opps
+            if all_opps:
+                play_audio_alert()
 
 with col2:
     if st.button('🔄 تحديث المحفظة'):
@@ -192,12 +203,12 @@ with col2:
         save_portfolio([])
         st.success("تم مسح كل الصفقات!")
 
-tab3, tab4 = st.tabs(["⏱️ Scalping (استراتيجية القناص المتكاملة)", "💼 محفظتي (دائمة)"])
+tab3, tab4 = st.tabs(["⏱️ Scalping (فريم 5 دقائق)", "💼 محفظتي (دائمة)"])
 
 with tab3:
-    st.info("🦅 البوت يدمج الآن فلتر قوة التريند (ADX) ومناطق الدعم والمقاومة مع مؤشرات الزخم والسيولة لضمان أعلى دقة ممكنة.")
+    st.info("⏱️ البوت يحلل الآن فريم الـ 5 دقائق لضمان دقة الإشارات واستقرارها بعيداً عن تذبذب الدقيقة الواحدة.")
     if not st.session_state.scalping_opps:
-        st.warning("البوت يراقب السوق بدقة.. في انتظار توافق التريند ومناطق الدعم/المقاومة الحقيقية.")
+        st.warning("جاري مراقبة شمعات الـ 5 دقائق.. أول ما تكتمل الشروط المؤكدة ستظهر الفرصة هنا.")
     else:
         for i, opp in enumerate(st.session_state.scalping_opps, 1):
             st.markdown(f"**{opp['symbol']}** {opp['direction']} (تقييم: {opp['score']}/100 ⭐️) | السعر: {opp['price']} | هدف: `{opp['tp']}` | وقف: `{opp['sl']}`")
