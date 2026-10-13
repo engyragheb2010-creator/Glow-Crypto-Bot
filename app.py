@@ -77,7 +77,7 @@ def track_trade(opp, trade_type):
 col1, col2 = st.columns([3, 1])
 with col1:
     if st.button('🚀 فحص سريع (EMA + MACD)'):
-        with st.spinner('جاري فحص التقاطعات وزخم الـ MACD على فريم 5 دقائق...'):
+        with st.spinner('جاري فحص جميع العملات (BTC, ETH, SOL, DOGE) على فريم 5 دقائق...'):
             symbols = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT']
             all_opps = []
             
@@ -94,7 +94,6 @@ with col1:
                     macd, macd_signal = calculate_macd(c)
                     atr = calculate_atr(h, l, c, 14)
                     
-                    # الشرطين الأساسيين فقط: تقاطع EMA + توافق الـ MACD
                     long_cross = (ema5.iloc[-2] <= ema13.iloc[-2]) and (ema5.iloc[-1] > ema13.iloc[-1])
                     short_cross = (ema5.iloc[-2] >= ema13.iloc[-2]) and (ema5.iloc[-1] < ema13.iloc[-1])
                     
@@ -160,7 +159,7 @@ with col2:
 tab3, tab4 = st.tabs(["⏱️ Scalping (الثنائي السريع)", "💼 محفظتي (دائمة)"])
 
 with tab3:
-    st.info("⚡ البوت يعتمد الآن حصرياً على تقاطع الـ (EMA 5/13) مع عزم الـ (MACD) على فريم الـ 5 دقائق.")
+    st.info("⚡ البوت يفحص الآن العملات الأبعة (BTC, ETH, SOL, DOGE) باستراتيجية (EMA + MACD) على فريم الـ 5 دقائق.")
     if not st.session_state.scalping_opps:
         st.warning("لا توجد تقاطعات مطابقة حالياً. جاري الفحص..")
     else:
@@ -178,4 +177,5 @@ with tab4:
             st.markdown(f"**{t['symbol']}** | {t['type']} | {t['direction']} | {status_icon} **{t['status']}**")
             st.markdown(f"دخول: {t['entry']} | هدف: {t['tp']} | وقف: {t['sl']}")
             st.markdown("---")
+
 
