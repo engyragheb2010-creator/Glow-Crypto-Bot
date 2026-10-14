@@ -7,7 +7,7 @@ import json
 import os
 
 st.set_page_config(page_title="Glow Pro SuperTrend Bot", page_icon="📈", layout="wide")
-st.title("📈 تطبيق التوصيات الذكي (مع فلترة الفرص الخاسرة تلقائياً)")
+st.title("📈 تطبيق التوصيات الذكي (مع تقييم الأرباح والخسائر بالألوان)")
 
 API_KEY = "41e8e6d1-3d2d-4861-b0df-61ccdb79e34b"
 SECRET_KEY = "1FC2FDF62E1F188458144B7700759BC3" 
@@ -105,13 +105,12 @@ def track_trade(opp, trade_type):
         'id': f"{opp['symbol']}_{time.time()}", 'symbol': opp['symbol'], 'type': trade_type,
         'direction': opp.get('direction', '🟢 LONG'), 'entry': opp['buy'], 
         'tp1': opp['tp1'], 'tp2': opp['tp2'], 'sl': opp['sl'], 
-        'status': '⏳ معلقة', 'secured': False
+        'status': '⏳ معلقة', 'secured': False, 'pnl_pct': 0.0
     }
     st.session_state.tracked_trades.append(new_trade)
     save_portfolio(st.session_state.tracked_trades)
     st.toast(f"تمت الإضافة بنجاح للمحفظة!")
 
-# استخراج العملات اللي صفقاتها خسرت مؤخراً عشان نعمل لها استبعاد مؤقت من عرض الفرص الجديدة
 recent_failed_symbols = [
     t['symbol'] for t in st.session_state.tracked_trades 
     if 'خسارة' in t['status'] or 'Hit SL' in t['status']
@@ -119,7 +118,7 @@ recent_failed_symbols = [
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.success("🤖 المراقبة تعمل مع فلترة العملات الخاسرة.")
+    st.success("🤖 المراقبة تعمل مع حساب نسب الأرباح والخسائر اللحظية.")
     
     symbols = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT']
     scalp_opps = []
@@ -161,7 +160,7 @@ with col1:
                         'buy': round(curr, dec), 'tp1': round(curr * 0.994, dec), 'tp2': round(curr * 0.985, dec), 'sl': round(curr + (1.0 * atr_5), dec)
                     })
                 
-            # 2. فحص التريند (15 دقيقة) - مع استبعاد العملات اللي ضربت SL مؤخراً
+            # 2. فحص التريند (15 دقيقة)
             if symbol not in recent_failed_symbols:
                 ohlcv_15m = exchange.fetch_ohlcv(symbol, '15m', limit=100)
                 h15 = np.array([c[2] for c in ohlcv_15m])
@@ -191,8 +190,8 @@ with col1:
     st.session_state.trend_opps = trend_opps
 
 with col2:
-    if st.button('🔄 تحديث المحفظة وفحص الأسعار'):
-        with st.spinner('جاري جلب الأسعار والتحقق من الأهداف...'):
+    if st.button('🔄 تحديث المحفظة وفحص الأرباح'):
+        with st.spinner('جاري حساب الأرباح والخسائر اللحظية...'):
             report_logs = []
             for t in st.session_state.tracked_trades:
                 if t['status'] in ['⏳ معلقة', '🟢 نشطة', '🎯 تم تحقيق TP1 (مؤمنة)']:
@@ -201,20 +200,29 @@ with col2:
                         curr = ticker['last']
                         is_long = 'LONG' in t['direction']
                         
+                        # حساب نسبة الربح أو الخسارة للحظة الحالية
+                        entry_val = t['entry']
+                        if is_long:
+                            pnl = ((curr - entry_val) / entry_val) * 100
+                        else:
+                            pnl = ((entry_val - curr) / entry_val) * 100
+                        t['pnl_pct'] = round(pnl, 2)
+                        
                         tp1 = t.get('tp1', t.get('tp', 0))
                         tp2 = t.get('tp2', t.get('tp', 0))
                         
-                        report_logs.append(f"عملة: {t['symbol']} | السعر الحالي: {curr} | الهدف الأول TP1: {tp1}")
+                        pnl_label = f"ربح: +{t['pnl_pct']}%" if t['pnl_pct'] >= 0 else f"خسارة: {t['pnl_pct']}%"
+                        report_logs.append(f"عملة: {t['symbol']} | السعر: {curr} | الحالة: {pnl_label}")
                         
                         if t['status'] == '⏳ معلقة':
-                            if (is_long and curr <= t['entry']) or (not is_long and curr >= t['entry']): 
+                            if (is_long and curr <= entry_val) or (not is_long and curr >= entry_val): 
                                 t['status'] = '🟢 نشطة'
                         
                         if t['status'] in ['🟢 نشطة', '🎯 تم تحقيق TP1 (مؤمنة)']:
                             if is_long:
                                 if curr >= tp1 and t['status'] == '🟢 نشطة':
                                     t['status'] = '🎯 تم تحقيق TP1 (مؤمنة)'
-                                    t['sl'] = t['entry']
+                                    t['sl'] = entry_val
                                     t['secured'] = True
                                 elif curr >= tp2: 
                                     t['status'] = '🎯 ربح كامل (Hit TP2)'
@@ -223,7 +231,7 @@ with col2:
                             else:
                                 if curr <= tp1 and t['status'] == '🟢 نشطة':
                                     t['status'] = '🎯 تم تحقيق TP1 (مؤمنة)'
-                                    t['sl'] = t['entry']
+                                    t['sl'] = entry_val
                                     t['secured'] = True
                                 elif curr <= tp2: 
                                     t['status'] = '🎯 ربح كامل (Hit TP2)'
@@ -232,12 +240,15 @@ with col2:
                     except: pass
             save_portfolio(st.session_state.tracked_trades)
             st.session_state.report_logs = report_logs
-        st.success("تم التحديث وفحص الأسعار!")
+        st.success("تم التحديث وحساب النسب!")
         
     if 'report_logs' in st.session_state and st.session_state.report_logs:
-        with st.expander("📊 تقرير الأسعار الفوري", expanded=True):
+        with st.expander("📊 تقرير الأرباح والخسائر الفوري", expanded=True):
             for log in st.session_state.report_logs:
-                st.write(log)
+                if "ربح" in log:
+                    st.markdown(f"<p style='color:green; font-weight:bold;'>{log}</p>", unsafe_allow_html=True)
+                else:
+                    st.markdown(f"<p style='color:red; font-weight:bold;'>{log}</p>", unsafe_allow_html=True)
         
     st.markdown("---")
     if st.button('🧹 مسح الصفقات المغلقة'):
@@ -253,18 +264,18 @@ with col2:
 tab3, tab_trend, tab4 = st.tabs(["⏱️ Scalping (5m)", "🌊 SuperTrend (15m)", "💼 محفظتي (دائمة)"])
 
 with tab3:
-    st.info("⏱️ إشارات السكالبينج اللحظية (تستبعد الصفقات الخاسرة مؤقتاً).")
+    st.info("⏱️ إشارات السكالبينج اللحظية.")
     if not st.session_state.scalping_opps:
-        st.warning("لا توجد فرص سكالبينج متاحة حالياً (أو تم استبعاد العملات المتذبذبة).. جاري البحث..")
+        st.warning("جاري البحث عن فرص سكالبينج...")
     else:
         for i, opp in enumerate(st.session_state.scalping_opps, 1):
             st.markdown(f"**{opp['symbol']}** | {opp['direction']} ({opp['score']}% ⭐️) | دخول: {opp['price']} | TP1: `{opp['tp1']}` | TP2: `{opp['tp2']}` | وقف: `{opp['sl']}`")
             if st.button(f"➕ تتبع اسكالبينج", key=f"sc_{i}_{opp['symbol']}"): track_trade(opp, 'Scalping')
 
 with tab_trend:
-    st.info("🌊 صفقات تتبع التريند (تستبعد العملات التي ضربت وقف الخسارة مؤخراً).")
+    st.info("🌊 صفقات تتبع التريند.")
     if not st.session_state.trend_opps:
-        st.warning("لا توجد تريندات جديدة متاحة حالياً بعد فلترة الصفقات الخاسرة..")
+        st.warning("جاري تحليل التريندات...")
     else:
         for i, opp in enumerate(st.session_state.trend_opps, 1):
             st.markdown(f"**{opp['symbol']}** | {opp['direction']} ({opp['score']}% 🚀) | دخول: {opp['price']} | TP1: `{opp['tp1']}` | TP2: `{opp['tp2']}` | وقف: `{opp['sl']}`")
@@ -281,12 +292,18 @@ with tab4:
             elif "خسارة" in t['status']: status_icon = "🛑"
             elif "حماية" in t['status'] or "بربح" in t['status']: status_icon = "🛡️"
             
+            pnl_val = t.get('pnl_pct', 0.0)
+            color_style = "color: green;" if pnl_val >= 0 else "color: red;"
+            pnl_text = f"ربح: +{pnl_val}%" if pnl_val >= 0 else f"خسارة: {pnl_val}%"
+            
             tp1_val = t.get('tp1', t.get('tp', 0))
             tp2_val = t.get('tp2', t.get('tp', 0))
             
             st.markdown(f"**{t['symbol']}** | نوع: {t['type']} | {t['direction']} | {status_icon} **{t['status']}**")
             st.markdown(f"دخول: {t['entry']} | TP1: {tp1_val} | TP2: {tp2_val} | وقف: {t['sl']}")
+            st.markdown(f"الحالة اللحظية: <span style='{color_style} font-weight: bold;'>{pnl_text}</span>", unsafe_allow_html=True)
             st.markdown("---")
 
 time.sleep(60)
 st.rerun()
+
