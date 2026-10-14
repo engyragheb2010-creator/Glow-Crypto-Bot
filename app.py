@@ -7,7 +7,7 @@ import json
 import os
 
 st.set_page_config(page_title="Glow Pro SuperTrend Bot", page_icon="📈", layout="wide")
-st.title("📈 تطبيق التوصيات الذكي (مع تقييم الأرباح والخسائر بالألوان)")
+st.title("📈 تطبيق التوصيات الذكي (مع فلتر قوة الاتجاه ADX لمنع التذبذب)")
 
 API_KEY = "41e8e6d1-3d2d-4861-b0df-61ccdb79e34b"
 SECRET_KEY = "1FC2FDF62E1F188458144B7700759BC3" 
@@ -73,6 +73,24 @@ def calculate_atr(highs, lows, closes, period=14):
     atr = pd.Series(tr_list).rolling(window=period).mean().iloc[-1]
     return atr if not np.isnan(atr) else (highs[-1] * 0.01)
 
+# دالة حساب مؤشر قوة الاتجاه ADX لتصفية السوق العرضي
+def calculate_adx(highs, lows, closes, period=14):
+    df = pd.DataFrame({'high': highs, 'low': lows, 'close': closes})
+    df['tr'] = np.maximum(df['high'] - df['low'], np.maximum(abs(df['high'] - df['close'].shift(1)), abs(df['low'] - df['close'].shift(1))))
+    df['up_move'] = df['high'] - df['high'].shift(1)
+    df['down_move'] = df['low'].shift(1) - df['low']
+    
+    df['plus_dm'] = np.where((df['up_move'] > df['down_move']) & (df['up_move'] > 0), df['up_move'], 0.0)
+    df['minus_dm'] = np.where((df['down_move'] > df['up_move']) & (df['down_move'] > 0), df['down_move'], 0.0)
+    
+    tr14 = df['tr'].rolling(window=period).sum()
+    plus_di = 100 * (df['plus_dm'].rolling(window=period).sum() / tr14)
+    minus_di = 100 * (df['minus_dm'].rolling(window=period).sum() / tr14)
+    
+    dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
+    adx = dx.rolling(window=period).mean().iloc[-1]
+    return adx if not np.isnan(adx) else 25.0
+
 def calculate_supertrend(highs, lows, closes, period=10, multiplier=3.0):
     hl2 = (highs + lows) / 2
     atr = pd.Series([max(highs[i]-lows[i], abs(highs[i]-closes[i-1]), abs(lows[i]-closes[i-1])) for i in range(len(closes))]).rolling(window=period).mean().values
@@ -118,7 +136,7 @@ recent_failed_symbols = [
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.success("🤖 المراقبة تعمل مع حساب نسب الأرباح والخسائر اللحظية.")
+    st.success("🤖 المراقبة تعمل مع فلتر الـ ADX الذكي لاستبعاد التذبذب.")
     
     symbols = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT']
     scalp_opps = []
@@ -160,7 +178,7 @@ with col1:
                         'buy': round(curr, dec), 'tp1': round(curr * 0.994, dec), 'tp2': round(curr * 0.985, dec), 'sl': round(curr + (1.0 * atr_5), dec)
                     })
                 
-            # 2. فحص التريند (15 دقيقة)
+            # 2. فحص التريند (15 دقيقة) مع فلتر قوة الاتجاه ADX
             if symbol not in recent_failed_symbols:
                 ohlcv_15m = exchange.fetch_ohlcv(symbol, '15m', limit=100)
                 h15 = np.array([c[2] for c in ohlcv_15m])
@@ -168,19 +186,24 @@ with col1:
                 c15 = np.array([c[4] for c in ohlcv_15m])
                 curr_15 = c15[-1]
                 
-                st_dir = calculate_supertrend(h15, l15, c15)
-                atr_15 = calculate_atr(h15, l15, c15, 14)
+                # حساب قوة الاتجاه ADX
+                adx_val = calculate_adx(h15, l15, c15, 14)
                 
-                if st_dir == 1:
-                    trend_opps.append({
-                        'symbol': symbol, 'direction': '📈 LONG (SuperTrend 15m)', 'price': curr_15, 'score': 97,
-                        'buy': round(curr_15, dec), 'tp1': round(curr_15 * 1.015, dec), 'tp2': round(curr_15 * 1.032, dec), 'sl': round(curr_15 - (1.2 * atr_15), dec)
-                    })
-                elif st_dir == -1:
-                    trend_opps.append({
-                        'symbol': symbol, 'direction': '📉 SHORT (SuperTrend 15m)', 'price': curr_15, 'score': 97,
-                        'buy': round(curr_15, dec), 'tp1': round(curr_15 * 0.985, dec), 'tp2': round(curr_15 * 0.968, dec), 'sl': round(curr_15 + (1.2 * atr_15), dec)
-                    })
+                # شرط أساسي: لو الـ ADX أكبر من 20 (يعني فيه اتجاه حقيقي)، نطلع الإشارة. لو أقل، السوق متذبذب نرفضها تماماً!
+                if adx_val >= 20:
+                    st_dir = calculate_supertrend(h15, l15, c15)
+                    atr_15 = calculate_atr(h15, l15, c15, 14)
+                    
+                    if st_dir == 1:
+                        trend_opps.append({
+                            'symbol': symbol, 'direction': '📈 LONG (SuperTrend 15m)', 'price': curr_15, 'score': int(70 + adx_val),
+                            'buy': round(curr_15, dec), 'tp1': round(curr_15 * 1.015, dec), 'tp2': round(curr_15 * 1.032, dec), 'sl': round(curr_15 - (1.2 * atr_15), dec)
+                        })
+                    elif st_dir == -1:
+                        trend_opps.append({
+                            'symbol': symbol, 'direction': '📉 SHORT (SuperTrend 15m)', 'price': curr_15, 'score': int(70 + adx_val),
+                            'buy': round(curr_15, dec), 'tp1': round(curr_15 * 0.985, dec), 'tp2': round(curr_15 * 0.968, dec), 'sl': round(curr_15 + (1.2 * atr_15), dec)
+                        })
         except: continue
             
     if (scalp_opps or trend_opps) and (len(scalp_opps) != len(st.session_state.scalping_opps)):
@@ -200,7 +223,6 @@ with col2:
                         curr = ticker['last']
                         is_long = 'LONG' in t['direction']
                         
-                        # حساب نسبة الربح أو الخسارة للحظة الحالية
                         entry_val = t['entry']
                         if is_long:
                             pnl = ((curr - entry_val) / entry_val) * 100
@@ -266,19 +288,19 @@ tab3, tab_trend, tab4 = st.tabs(["⏱️ Scalping (5m)", "🌊 SuperTrend (15m)"
 with tab3:
     st.info("⏱️ إشارات السكالبينج اللحظية.")
     if not st.session_state.scalping_opps:
-        st.warning("جاري البحث عن فرص سكالبينج...")
+        st.warning("جاري البحث عن فرص سكالبينج دقيقة..")
     else:
         for i, opp in enumerate(st.session_state.scalping_opps, 1):
             st.markdown(f"**{opp['symbol']}** | {opp['direction']} ({opp['score']}% ⭐️) | دخول: {opp['price']} | TP1: `{opp['tp1']}` | TP2: `{opp['tp2']}` | وقف: `{opp['sl']}`")
             if st.button(f"➕ تتبع اسكالبينج", key=f"sc_{i}_{opp['symbol']}"): track_trade(opp, 'Scalping')
 
 with tab_trend:
-    st.info("🌊 صفقات تتبع التريند.")
+    st.info("🌊 صفقات تتبع التريند (محمية بفلتر الـ ADX).")
     if not st.session_state.trend_opps:
-        st.warning("جاري تحليل التريندات...")
+        st.warning("⚠️ السوق حالياً في حالة تذبذب عرضي (ADX < 20).. تم حجب صفقات SuperTrend لمنع الخسائر حتى ينشط اتجاه حقيقي!")
     else:
         for i, opp in enumerate(st.session_state.trend_opps, 1):
-            st.markdown(f"**{opp['symbol']}** | {opp['direction']} ({opp['score']}% 🚀) | دخول: {opp['price']} | TP1: `{opp['tp1']}` | TP2: `{opp['tp2']}` | وقف: `{opp['sl']}`")
+            st.markdown(f"**{opp['symbol']}** | {opp['direction']} (قوة اتجاه: {opp['score']} 🚀) | دخول: {opp['price']} | TP1: `{opp['tp1']}` | TP2: `{opp['tp2']}` | وقف: `{opp['sl']}`")
             if st.button(f"➕ تتبع SuperTrend", key=f"tr_{i}_{opp['symbol']}"): track_trade(opp, 'Trend')
 
 with tab4:
@@ -306,4 +328,3 @@ with tab4:
 
 time.sleep(60)
 st.rerun()
-
