@@ -7,7 +7,7 @@ import json
 import os
 
 st.set_page_config(page_title="Glow Pro SuperTrend Bot", page_icon="📈", layout="wide")
-st.title("📈 تطبيق التوصيات الذكي (مع تقرير فحص الأهداف الفوري)")
+st.title("📈 تطبيق التوصيات الذكي (مع فلترة الفرص الخاسرة تلقائياً)")
 
 API_KEY = "41e8e6d1-3d2d-4861-b0df-61ccdb79e34b"
 SECRET_KEY = "1FC2FDF62E1F188458144B7700759BC3" 
@@ -98,7 +98,7 @@ def get_decimals(price):
 
 def track_trade(opp, trade_type):
     for t in st.session_state.tracked_trades:
-        if t['symbol'] == opp['symbol'] and t['status'] in ['⏳ معلقة', '🟢 نشطة']:
+        if t['symbol'] == opp['symbol'] and t['status'] in ['⏳ معلقة', '🟢 نشطة', '🎯 تم تحقيق TP1 (مؤمنة)']:
             st.toast(f"الصفقة موجودة بالفعل!")
             return
     new_trade = {
@@ -111,9 +111,15 @@ def track_trade(opp, trade_type):
     save_portfolio(st.session_state.tracked_trades)
     st.toast(f"تمت الإضافة بنجاح للمحفظة!")
 
+# استخراج العملات اللي صفقاتها خسرت مؤخراً عشان نعمل لها استبعاد مؤقت من عرض الفرص الجديدة
+recent_failed_symbols = [
+    t['symbol'] for t in st.session_state.tracked_trades 
+    if 'خسارة' in t['status'] or 'Hit SL' in t['status']
+]
+
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.success("🤖 المراقبة تعمل مع تقرير فحص الأهداف المباشر.")
+    st.success("🤖 المراقبة تعمل مع فلترة العملات الخاسرة.")
     
     symbols = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT']
     scalp_opps = []
@@ -141,39 +147,41 @@ with col1:
             long_cross_5 = (ema20_5.iloc[-2] <= ema50_5.iloc[-2]) and (ema20_5.iloc[-1] > ema50_5.iloc[-1])
             short_cross_5 = (ema20_5.iloc[-2] >= ema50_5.iloc[-2]) and (ema20_5.iloc[-1] < ema50_5.iloc[-1])
             
-            if long_cross_5 and macd_5 > macds_5 and rsi_5 > 50:
-                score = min(98, int(85 + (rsi_5 - 50) * 0.3 + abs(macd_5 - macds_5) * 10))
-                scalp_opps.append({
-                    'symbol': symbol, 'direction': '🟢 LONG (Scalp)', 'price': curr, 'score': score,
-                    'buy': round(curr, dec), 'tp1': round(curr * 1.006, dec), 'tp2': round(curr * 1.015, dec), 'sl': round(curr - (1.0 * atr_5), dec)
-                })
-            elif short_cross_5 and macd_5 < macds_5 and rsi_5 < 50:
-                score = min(98, int(85 + (50 - rsi_5) * 0.3 + abs(macd_5 - macds_5) * 10))
-                scalp_opps.append({
-                    'symbol': symbol, 'direction': '🔴 SHORT (Scalp)', 'price': curr, 'score': score,
-                    'buy': round(curr, dec), 'tp1': round(curr * 0.994, dec), 'tp2': round(curr * 0.985, dec), 'sl': round(curr + (1.0 * atr_5), dec)
-                })
+            if symbol not in recent_failed_symbols:
+                if long_cross_5 and macd_5 > macds_5 and rsi_5 > 50:
+                    score = min(98, int(85 + (rsi_5 - 50) * 0.3 + abs(macd_5 - macds_5) * 10))
+                    scalp_opps.append({
+                        'symbol': symbol, 'direction': '🟢 LONG (Scalp)', 'price': curr, 'score': score,
+                        'buy': round(curr, dec), 'tp1': round(curr * 1.006, dec), 'tp2': round(curr * 1.015, dec), 'sl': round(curr - (1.0 * atr_5), dec)
+                    })
+                elif short_cross_5 and macd_5 < macds_5 and rsi_5 < 50:
+                    score = min(98, int(85 + (50 - rsi_5) * 0.3 + abs(macd_5 - macds_5) * 10))
+                    scalp_opps.append({
+                        'symbol': symbol, 'direction': '🔴 SHORT (Scalp)', 'price': curr, 'score': score,
+                        'buy': round(curr, dec), 'tp1': round(curr * 0.994, dec), 'tp2': round(curr * 0.985, dec), 'sl': round(curr + (1.0 * atr_5), dec)
+                    })
                 
-            # 2. فحص التريند (15 دقيقة)
-            ohlcv_15m = exchange.fetch_ohlcv(symbol, '15m', limit=100)
-            h15 = np.array([c[2] for c in ohlcv_15m])
-            l15 = np.array([c[3] for c in ohlcv_15m])
-            c15 = np.array([c[4] for c in ohlcv_15m])
-            curr_15 = c15[-1]
-            
-            st_dir = calculate_supertrend(h15, l15, c15)
-            atr_15 = calculate_atr(h15, l15, c15, 14)
-            
-            if st_dir == 1:
-                trend_opps.append({
-                    'symbol': symbol, 'direction': '📈 LONG (SuperTrend 15m)', 'price': curr_15, 'score': 97,
-                    'buy': round(curr_15, dec), 'tp1': round(curr_15 * 1.015, dec), 'tp2': round(curr_15 * 1.032, dec), 'sl': round(curr_15 - (1.2 * atr_15), dec)
-                })
-            elif st_dir == -1:
-                trend_opps.append({
-                    'symbol': symbol, 'direction': '📉 SHORT (SuperTrend 15m)', 'price': curr_15, 'score': 97,
-                    'buy': round(curr_15, dec), 'tp1': round(curr_15 * 0.985, dec), 'tp2': round(curr_15 * 0.968, dec), 'sl': round(curr_15 + (1.2 * atr_15), dec)
-                })
+            # 2. فحص التريند (15 دقيقة) - مع استبعاد العملات اللي ضربت SL مؤخراً
+            if symbol not in recent_failed_symbols:
+                ohlcv_15m = exchange.fetch_ohlcv(symbol, '15m', limit=100)
+                h15 = np.array([c[2] for c in ohlcv_15m])
+                l15 = np.array([c[3] for c in ohlcv_15m])
+                c15 = np.array([c[4] for c in ohlcv_15m])
+                curr_15 = c15[-1]
+                
+                st_dir = calculate_supertrend(h15, l15, c15)
+                atr_15 = calculate_atr(h15, l15, c15, 14)
+                
+                if st_dir == 1:
+                    trend_opps.append({
+                        'symbol': symbol, 'direction': '📈 LONG (SuperTrend 15m)', 'price': curr_15, 'score': 97,
+                        'buy': round(curr_15, dec), 'tp1': round(curr_15 * 1.015, dec), 'tp2': round(curr_15 * 1.032, dec), 'sl': round(curr_15 - (1.2 * atr_15), dec)
+                    })
+                elif st_dir == -1:
+                    trend_opps.append({
+                        'symbol': symbol, 'direction': '📉 SHORT (SuperTrend 15m)', 'price': curr_15, 'score': 97,
+                        'buy': round(curr_15, dec), 'tp1': round(curr_15 * 0.985, dec), 'tp2': round(curr_15 * 0.968, dec), 'sl': round(curr_15 + (1.2 * atr_15), dec)
+                    })
         except: continue
             
     if (scalp_opps or trend_opps) and (len(scalp_opps) != len(st.session_state.scalping_opps)):
@@ -226,7 +234,6 @@ with col2:
             st.session_state.report_logs = report_logs
         st.success("تم التحديث وفحص الأسعار!")
         
-    # عرض تقرير الفحص لو موجود
     if 'report_logs' in st.session_state and st.session_state.report_logs:
         with st.expander("📊 تقرير الأسعار الفوري", expanded=True):
             for log in st.session_state.report_logs:
@@ -246,18 +253,18 @@ with col2:
 tab3, tab_trend, tab4 = st.tabs(["⏱️ Scalping (5m)", "🌊 SuperTrend (15m)", "💼 محفظتي (دائمة)"])
 
 with tab3:
-    st.info("⏱️ إشارات السكالبينج اللحظية.")
+    st.info("⏱️ إشارات السكالبينج اللحظية (تستبعد الصفقات الخاسرة مؤقتاً).")
     if not st.session_state.scalping_opps:
-        st.warning("جاري البحث عن فرص سكالبينج دقيقة..")
+        st.warning("لا توجد فرص سكالبينج متاحة حالياً (أو تم استبعاد العملات المتذبذبة).. جاري البحث..")
     else:
         for i, opp in enumerate(st.session_state.scalping_opps, 1):
             st.markdown(f"**{opp['symbol']}** | {opp['direction']} ({opp['score']}% ⭐️) | دخول: {opp['price']} | TP1: `{opp['tp1']}` | TP2: `{opp['tp2']}` | وقف: `{opp['sl']}`")
             if st.button(f"➕ تتبع اسكالبينج", key=f"sc_{i}_{opp['symbol']}"): track_trade(opp, 'Scalping')
 
 with tab_trend:
-    st.info("🌊 صفقات تتبع التريند الاحترافي باستخدام مؤشر SuperTrend.")
+    st.info("🌊 صفقات تتبع التريند (تستبعد العملات التي ضربت وقف الخسارة مؤخراً).")
     if not st.session_state.trend_opps:
-        st.warning("جاري تحليل تريندات السوق..")
+        st.warning("لا توجد تريندات جديدة متاحة حالياً بعد فلترة الصفقات الخاسرة..")
     else:
         for i, opp in enumerate(st.session_state.trend_opps, 1):
             st.markdown(f"**{opp['symbol']}** | {opp['direction']} ({opp['score']}% 🚀) | دخول: {opp['price']} | TP1: `{opp['tp1']}` | TP2: `{opp['tp2']}` | وقف: `{opp['sl']}`")
@@ -283,7 +290,3 @@ with tab4:
 
 time.sleep(60)
 st.rerun()
-
-
-
-
