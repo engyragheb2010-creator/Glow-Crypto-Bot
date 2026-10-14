@@ -7,7 +7,7 @@ import json
 import os
 
 st.set_page_config(page_title="Glow Pro SuperTrend Bot", page_icon="📈", layout="wide")
-st.title("📈 تطبيق التوصيات الذكي (فصل فلتر التذبذب عن السكالبينج)")
+st.title("📈 تطبيق التوصيات الذكي (الإصدار الشامل والمحدث)")
 
 API_KEY = "41e8e6d1-3d2d-4861-b0df-61ccdb79e34b"
 SECRET_KEY = "1FC2FDF62E1F188458144B7700759BC3" 
@@ -128,14 +128,14 @@ def track_trade(opp, trade_type):
     save_portfolio(st.session_state.tracked_trades)
     st.toast(f"تمت الإضافة بنجاح للمحفظة!")
 
-recent_failed_symbols = [
+active_or_failed_symbols = [
     t['symbol'] for t in st.session_state.tracked_trades 
-    if 'خسارة' in t['status'] or 'Hit SL' in t['status']
+    if t['status'] in ['⏳ معلقة', '🟢 نشطة', '🎯 تم تحقيق TP1 (مؤمنة)'] or 'خسارة' in t['status'] or 'Hit SL' in t['status']
 ]
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.success("🤖 المراقبة تعمل: السكالبينج نشط في التذبذب، والـ SuperTrend محمي بفلتر الاتجاه.")
+    st.success("🤖 المراقبة تعمل بدقة (تم فصل حساب الربح عن الصفقات المعلقة).")
     
     symbols = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT']
     scalp_opps = []
@@ -147,7 +147,7 @@ with col1:
             curr_price = ticker_check['last']
             dec = get_decimals(curr_price)
             
-            # 1. فحص الاسكالبينج (5 دقائق) - يعمل بكامل حريته حتى في التذبذب
+            # 1. فحص الاسكالبينج (5 دقائق)
             ohlcv_5m = exchange.fetch_ohlcv(symbol, '5m', limit=150)
             h5 = np.array([c[2] for c in ohlcv_5m])
             l5 = np.array([c[3] for c in ohlcv_5m])
@@ -163,7 +163,7 @@ with col1:
             long_cross_5 = (ema20_5.iloc[-2] <= ema50_5.iloc[-2]) and (ema20_5.iloc[-1] > ema50_5.iloc[-1])
             short_cross_5 = (ema20_5.iloc[-2] >= ema50_5.iloc[-2]) and (ema20_5.iloc[-1] < ema50_5.iloc[-1])
             
-            if symbol not in recent_failed_symbols:
+            if symbol not in active_or_failed_symbols:
                 if long_cross_5 and macd_5 > macds_5 and rsi_5 > 50:
                     score = min(98, int(85 + (rsi_5 - 50) * 0.3 + abs(macd_5 - macds_5) * 10))
                     scalp_opps.append({
@@ -177,8 +177,8 @@ with col1:
                         'buy': round(curr, dec), 'tp1': round(curr * 0.994, dec), 'tp2': round(curr * 0.985, dec), 'sl': round(curr + (1.0 * atr_5), dec)
                     })
                 
-            # 2. فحص التريند (15 دقيقة) - خاضع لفلتر الـ ADX الصارم
-            if symbol not in recent_failed_symbols:
+            # 2. فحص التريند (15 دقيقة)
+            if symbol not in active_or_failed_symbols:
                 ohlcv_15m = exchange.fetch_ohlcv(symbol, '15m', limit=100)
                 h15 = np.array([c[2] for c in ohlcv_15m])
                 l15 = np.array([c[3] for c in ohlcv_15m])
@@ -187,7 +187,7 @@ with col1:
                 
                 adx_val = calculate_adx(h15, l15, c15, 14)
                 
-                if adx_val >= 20:
+                if adx_val >= 26:
                     st_dir = calculate_supertrend(h15, l15, c15)
                     atr_15 = calculate_atr(h15, l15, c15, 14)
                     
@@ -211,7 +211,7 @@ with col1:
 
 with col2:
     if st.button('🔄 تحديث المحفظة وفحص الأرباح'):
-        with st.spinner('جاري حساب الأرباح والخسائر اللحظية...'):
+        with st.spinner('جاري فحص حالة الأوامر والأسعار...'):
             report_logs = []
             for t in st.session_state.tracked_trades:
                 if t['status'] in ['⏳ معلقة', '🟢 نشطة', '🎯 تم تحقيق TP1 (مؤمنة)']:
@@ -219,23 +219,28 @@ with col2:
                         ticker = exchange.fetch_ticker(t['symbol'])
                         curr = ticker['last']
                         is_long = 'LONG' in t['direction']
-                        
                         entry_val = t['entry']
-                        if is_long:
-                            pnl = ((curr - entry_val) / entry_val) * 100
-                        else:
-                            pnl = ((entry_val - curr) / entry_val) * 100
-                        t['pnl_pct'] = round(pnl, 2)
                         
-                        tp1 = t.get('tp1', t.get('tp', 0))
-                        tp2 = t.get('tp2', t.get('tp', 0))
-                        
-                        pnl_label = f"ربح: +{t['pnl_pct']}%" if t['pnl_pct'] >= 0 else f"خسارة: {t['pnl_pct']}%"
-                        report_logs.append(f"عملة: {t['symbol']} | السعر: {curr} | الحالة: {pnl_label}")
-                        
+                        # تفعيل الصفقة المعلقة لو السعر وصل لمستواها
                         if t['status'] == '⏳ معلقة':
                             if (is_long and curr <= entry_val) or (not is_long and curr >= entry_val): 
                                 t['status'] = '🟢 نشطة'
+                        
+                        # حساب PnL فقط لو الصفقة نشطة فعلياً
+                        if t['status'] != '⏳ معلقة':
+                            if is_long:
+                                pnl = ((curr - entry_val) / entry_val) * 100
+                            else:
+                                pnl = ((entry_val - curr) / entry_val) * 100
+                            t['pnl_pct'] = round(pnl, 2)
+                            pnl_label = f"ربح: +{t['pnl_pct']}%" if t['pnl_pct'] >= 0 else f"خسارة: {t['pnl_pct']}%"
+                            report_logs.append(f"عملة: {t['symbol']} | السعر: {curr} | الحالة: {pnl_label}")
+                        else:
+                            t['pnl_pct'] = 0.0
+                            report_logs.append(f"عملة: {t['symbol']} | السعر: {curr} | الحالة: ⏳ معلقة في الانتظار")
+                        
+                        tp1 = t.get('tp1', t.get('tp', 0))
+                        tp2 = t.get('tp2', t.get('tp', 0))
                         
                         if t['status'] in ['🟢 نشطة', '🎯 تم تحقيق TP1 (مؤمنة)']:
                             if is_long:
@@ -259,13 +264,15 @@ with col2:
                     except: pass
             save_portfolio(st.session_state.tracked_trades)
             st.session_state.report_logs = report_logs
-        st.success("تم التحديث وحساب النسب!")
+        st.success("تم التحديث بنجاح!")
         
     if 'report_logs' in st.session_state and st.session_state.report_logs:
-        with st.expander("📊 تقرير الأرباح والخسائر الفوري", expanded=True):
+        with st.expander("📊 تقرير الأرباح والفحص الفوري", expanded=True):
             for log in st.session_state.report_logs:
                 if "ربح" in log:
                     st.markdown(f"<p style='color:green; font-weight:bold;'>{log}</p>", unsafe_allow_html=True)
+                elif "معلقة" in log:
+                    st.markdown(f"<p style='color:gray; font-weight:bold;'>{log}</p>", unsafe_allow_html=True)
                 else:
                     st.markdown(f"<p style='color:red; font-weight:bold;'>{log}</p>", unsafe_allow_html=True)
         
@@ -283,18 +290,18 @@ with col2:
 tab3, tab_trend, tab4 = st.tabs(["⏱️ Scalping (5m)", "🌊 SuperTrend (15m)", "💼 محفظتي (دائمة)"])
 
 with tab3:
-    st.info("⏱️ إشارات السكالبينج اللحظية (تعمل بحرية في الأسواق المتذبذبة).")
+    st.info("⏱️ إشارات السكالبينج اللحظية.")
     if not st.session_state.scalping_opps:
-        st.warning("جاري البحث عن فرص سكالبينج دقيقة في الشموع اللحظية..")
+        st.warning("جاري البحث عن فرص سكالبينج...")
     else:
         for i, opp in enumerate(st.session_state.scalping_opps, 1):
             st.markdown(f"**{opp['symbol']}** | {opp['direction']} ({opp['score']}% ⭐️) | دخول: {opp['price']} | TP1: `{opp['tp1']}` | TP2: `{opp['tp2']}` | وقف: `{opp['sl']}`")
             if st.button(f"➕ تتبع اسكالبينج", key=f"sc_{i}_{opp['symbol']}"): track_trade(opp, 'Scalping')
 
 with tab_trend:
-    st.info("🌊 صفقات تتبع التريند (محمية بفلتر الـ ADX).")
+    st.info("🌊 صفقات تتبع التريند.")
     if not st.session_state.trend_opps:
-        st.warning("⚠️ السوق حالياً متذبذب (التريند متوقف).. بينما تبويب السكالبينج يعمل بالأسفل لاصطياد الحركات السريعة!")
+        st.warning("⚠️ لا توجد تريندات متاحة حالياً (تم حجب التذبذب).. تابع السكالبينج بالأسفل!")
     else:
         for i, opp in enumerate(st.session_state.trend_opps, 1):
             st.markdown(f"**{opp['symbol']}** | {opp['direction']} (قوة اتجاه: {opp['score']} 🚀) | دخول: {opp['price']} | TP1: `{opp['tp1']}` | TP2: `{opp['tp2']}` | وقف: `{opp['sl']}`")
@@ -311,16 +318,21 @@ with tab4:
             elif "خسارة" in t['status']: status_icon = "🛑"
             elif "حماية" in t['status'] or "بربح" in t['status']: status_icon = "🛡️"
             
-            pnl_val = t.get('pnl_pct', 0.0)
-            color_style = "color: green;" if pnl_val >= 0 else "color: red;"
-            pnl_text = f"ربح: +{pnl_val}%" if pnl_val >= 0 else f"خسارة: {pnl_val}%"
-            
             tp1_val = t.get('tp1', t.get('tp', 0))
             tp2_val = t.get('tp2', t.get('tp', 0))
             
             st.markdown(f"**{t['symbol']}** | نوع: {t['type']} | {t['direction']} | {status_icon} **{t['status']}**")
             st.markdown(f"دخول: {t['entry']} | TP1: {tp1_val} | TP2: {tp2_val} | وقف: {t['sl']}")
-            st.markdown(f"الحالة اللحظية: <span style='{color_style} font-weight: bold;'>{pnl_text}</span>", unsafe_allow_html=True)
+            
+            # عرض الحالة اللحظية فقط لو الصفقة نشطة، ولو معلقة نكتب في الانتظار من غير نسبة وهمية
+            if t['status'] == '⏳ معلقة':
+                st.markdown("الحالة اللحظية: <span style='color: gray; font-weight: bold;'>في انتظار تفعيل الدخول (معلقة)</span>", unsafe_allow_html=True)
+            else:
+                pnl_val = t.get('pnl_pct', 0.0)
+                color_style = "color: green;" if pnl_val >= 0 else "color: red;"
+                pnl_text = f"ربح: +{pnl_val}%" if pnl_val >= 0 else f"خسارة: {pnl_val}%"
+                st.markdown(f"الحالة اللحظية: <span style='{color_style} font-weight: bold;'>{pnl_text}</span>", unsafe_allow_html=True)
+                
             st.markdown("---")
 
 time.sleep(60)
