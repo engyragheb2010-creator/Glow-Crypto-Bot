@@ -7,7 +7,7 @@ import json
 import os
 
 st.set_page_config(page_title="Glow Pro SuperTrend Bot", page_icon="📈", layout="wide")
-st.title("📈 تطبيق التوصيات الذكي (باستراتيجية SuperTrend وأهداف مئوية متباينة)")
+st.title("📈 تطبيق التوصيات الذكي (مع تقرير فحص الأهداف الفوري)")
 
 API_KEY = "41e8e6d1-3d2d-4861-b0df-61ccdb79e34b"
 SECRET_KEY = "1FC2FDF62E1F188458144B7700759BC3" 
@@ -73,21 +73,15 @@ def calculate_atr(highs, lows, closes, period=14):
     atr = pd.Series(tr_list).rolling(window=period).mean().iloc[-1]
     return atr if not np.isnan(atr) else (highs[-1] * 0.01)
 
-# دالة محاكاة مؤشر SuperTrend الشهير الخاص بـ TradingView
 def calculate_supertrend(highs, lows, closes, period=10, multiplier=3.0):
     hl2 = (highs + lows) / 2
     atr = pd.Series([max(highs[i]-lows[i], abs(highs[i]-closes[i-1]), abs(lows[i]-closes[i-1])) for i in range(len(closes))]).rolling(window=period).mean().values
-    
-    upperband = hl2 + (multiplier * atr)
     lowerband = hl2 - (multiplier * atr)
     
-    # تحديد اتجاه التريند بناءً على إغلاق السعر مقارنة بـ SuperTrend النطاقي
-    st_direction = 1 # 1 تعني صاعد (أخضر)، -1 هابط (أحمر)
     if closes[-1] < lowerband[-1]:
-        st_direction = -1
+        return -1
     else:
-        st_direction = 1
-    return st_direction
+        return 1
 
 def play_audio_alert():
     audio_html = """
@@ -119,7 +113,7 @@ def track_trade(opp, trade_type):
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.success("🤖 المراقبة تعمل باستراتيجية SuperTrend المتقدمة وأهداف مئوية دقيقة.")
+    st.success("🤖 المراقبة تعمل مع تقرير فحص الأهداف المباشر.")
     
     symbols = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT']
     scalp_opps = []
@@ -160,7 +154,7 @@ with col1:
                     'buy': round(curr, dec), 'tp1': round(curr * 0.994, dec), 'tp2': round(curr * 0.985, dec), 'sl': round(curr + (1.0 * atr_5), dec)
                 })
                 
-            # 2. فحص التريند الاحترافي باستخدام SuperTrend (فريم 15 دقيقة)
+            # 2. فحص التريند (15 دقيقة)
             ohlcv_15m = exchange.fetch_ohlcv(symbol, '15m', limit=100)
             h15 = np.array([c[2] for c in ohlcv_15m])
             l15 = np.array([c[3] for c in ohlcv_15m])
@@ -170,13 +164,11 @@ with col1:
             st_dir = calculate_supertrend(h15, l15, c15)
             atr_15 = calculate_atr(h15, l15, c15, 14)
             
-            # لو SuperTrend إيجابي (أخضر - تريند صاعد)
             if st_dir == 1:
                 trend_opps.append({
                     'symbol': symbol, 'direction': '📈 LONG (SuperTrend 15m)', 'price': curr_15, 'score': 97,
                     'buy': round(curr_15, dec), 'tp1': round(curr_15 * 1.015, dec), 'tp2': round(curr_15 * 1.032, dec), 'sl': round(curr_15 - (1.2 * atr_15), dec)
                 })
-            # لو SuperTrend سلبي (أحمر - تريند هابط)
             elif st_dir == -1:
                 trend_opps.append({
                     'symbol': symbol, 'direction': '📉 SHORT (SuperTrend 15m)', 'price': curr_15, 'score': 97,
@@ -191,8 +183,9 @@ with col1:
     st.session_state.trend_opps = trend_opps
 
 with col2:
-    if st.button('🔄 تحديث المحفظة يدوي'):
-        with st.spinner('تحديث...'):
+    if st.button('🔄 تحديث المحفظة وفحص الأسعار'):
+        with st.spinner('جاري جلب الأسعار والتحقق من الأهداف...'):
+            report_logs = []
             for t in st.session_state.tracked_trades:
                 if t['status'] in ['⏳ معلقة', '🟢 نشطة', '🎯 تم تحقيق TP1 (مؤمنة)']:
                     try:
@@ -202,6 +195,8 @@ with col2:
                         
                         tp1 = t.get('tp1', t.get('tp', 0))
                         tp2 = t.get('tp2', t.get('tp', 0))
+                        
+                        report_logs.append(f"عملة: {t['symbol']} | السعر الحالي: {curr} | الهدف الأول TP1: {tp1}")
                         
                         if t['status'] == '⏳ معلقة':
                             if (is_long and curr <= t['entry']) or (not is_long and curr >= t['entry']): 
@@ -228,7 +223,14 @@ with col2:
                                     t['status'] = '🛑 خسارة (Hit SL)' if not t.get('secured', False) else '🛡️ خروج بربح TP1 (بعد تأمين الوقف)'
                     except: pass
             save_portfolio(st.session_state.tracked_trades)
-        st.success("تم التحديث!")
+            st.session_state.report_logs = report_logs
+        st.success("تم التحديث وفحص الأسعار!")
+        
+    # عرض تقرير الفحص لو موجود
+    if 'report_logs' in st.session_state and st.session_state.report_logs:
+        with st.expander("📊 تقرير الأسعار الفوري", expanded=True):
+            for log in st.session_state.report_logs:
+                st.write(log)
         
     st.markdown("---")
     if st.button('🧹 مسح الصفقات المغلقة'):
@@ -253,7 +255,7 @@ with tab3:
             if st.button(f"➕ تتبع اسكالبينج", key=f"sc_{i}_{opp['symbol']}"): track_trade(opp, 'Scalping')
 
 with tab_trend:
-    st.info("🌊 صفقات تتبع التريند الاحترافي باستخدام مؤشر SuperTrend (TradingView Style).")
+    st.info("🌊 صفقات تتبع التريند الاحترافي باستخدام مؤشر SuperTrend.")
     if not st.session_state.trend_opps:
         st.warning("جاري تحليل تريندات السوق..")
     else:
@@ -281,6 +283,7 @@ with tab4:
 
 time.sleep(60)
 st.rerun()
+
 
 
 
