@@ -6,8 +6,8 @@ import time
 import json
 import os
 
-st.set_page_config(page_title="Glow Pro SuperTrend Bot", page_icon="📈", layout="wide")
-st.title("📈 تطبيق التوصيات الذكي (الإصدار الشامل والمحدث)")
+st.set_page_config(page_title="Glow Pro Smart Money Bot", page_icon="🐋", layout="wide")
+st.title("🐋 تطبيق التداول المؤسسي (SMC & Squeeze Momentum)")
 
 API_KEY = "41e8e6d1-3d2d-4861-b0df-61ccdb79e34b"
 SECRET_KEY = "1FC2FDF62E1F188458144B7700759BC3" 
@@ -33,36 +33,6 @@ if 'scalping_opps' not in st.session_state: st.session_state.scalping_opps = []
 if 'trend_opps' not in st.session_state: st.session_state.trend_opps = []
 if 'tracked_trades' not in st.session_state: st.session_state.tracked_trades = load_portfolio()
 
-def calculate_rsi(prices, period=14):
-    deltas = np.diff(prices)
-    if len(deltas) < period + 1: return 50
-    seed = deltas[:period+1]
-    up = seed[seed >= 0].sum() / period
-    down = -seed[seed < 0].sum() / period
-    rs = up / down if down != 0 else 0
-    rsi = 100. - (100. / (1. + rs))
-    for i in range(period, len(deltas)):
-        delta = deltas[i]
-        if delta > 0:
-            up = (up * (period - 1) + delta) / period
-            down = (down * (period - 1)) / period
-        else:
-            up = (up * (period - 1)) / period
-            down = (down * (period - 1) - delta) / period
-            rs = up / down if down != 0 else 0
-            rsi = 100. - (100. / (1. + rs))
-    return rsi
-
-def calculate_macd(prices):
-    exp1 = pd.Series(prices).ewm(span=12, adjust=False).mean()
-    exp2 = pd.Series(prices).ewm(span=26, adjust=False).mean()
-    macd = exp1 - exp2
-    signal = macd.ewm(span=9, adjust=False).mean()
-    return macd.iloc[-1], signal.iloc[-1]
-
-def calculate_ema_series(prices, period):
-    return pd.Series(prices).ewm(span=period, adjust=False).mean()
-
 def calculate_atr(highs, lows, closes, period=14):
     tr_list = [highs[0] - lows[0]]
     for i in range(1, len(closes)):
@@ -73,32 +43,53 @@ def calculate_atr(highs, lows, closes, period=14):
     atr = pd.Series(tr_list).rolling(window=period).mean().iloc[-1]
     return atr if not np.isnan(atr) else (highs[-1] * 0.01)
 
-def calculate_adx(highs, lows, closes, period=14):
-    df = pd.DataFrame({'high': highs, 'low': lows, 'close': closes})
-    df['tr'] = np.maximum(df['high'] - df['low'], np.maximum(abs(df['high'] - df['close'].shift(1)), abs(df['low'] - df['close'].shift(1))))
-    df['up_move'] = df['high'] - df['high'].shift(1)
-    df['down_move'] = df['low'].shift(1) - df['low']
-    
-    df['plus_dm'] = np.where((df['up_move'] > df['down_move']) & (df['up_move'] > 0), df['up_move'], 0.0)
-    df['minus_dm'] = np.where((df['down_move'] > df['up_move']) & (df['down_move'] > 0), df['down_move'], 0.0)
-    
-    tr14 = df['tr'].rolling(window=period).sum()
-    plus_di = 100 * (df['plus_dm'].rolling(window=period).sum() / tr14)
-    minus_di = 100 * (df['minus_dm'].rolling(window=period).sum() / tr14)
-    
-    dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di)
-    adx = dx.rolling(window=period).mean().iloc[-1]
-    return adx if not np.isnan(adx) else 25.0
+# 1. استراتيجية السكالبينج: FVG (Fair Value Gap)
+def detect_fvg_entry(highs, lows, closes, curr_price):
+    # نبحث في آخر 10 شموع عن فجوة سعرية تركها الحيتان
+    for i in range(len(closes)-2, len(closes)-10, -1):
+        # FVG شرائي (Bullish)
+        if lows[i] > highs[i-2]:
+            fvg_top = lows[i]
+            fvg_bottom = highs[i-2]
+            # الدخول لو السعر الحالي نزل يختبر الفجوة
+            if fvg_bottom <= curr_price <= fvg_top:
+                return "LONG", fvg_bottom
+        
+        # FVG بيعي (Bearish)
+        elif highs[i] < lows[i-2]:
+            fvg_bottom = highs[i]
+            fvg_top = lows[i-2]
+            # الدخول لو السعر الحالي صعد يختبر الفجوة
+            if fvg_bottom <= curr_price <= fvg_top:
+                return "SHORT", fvg_top
+    return None, 0
 
-def calculate_supertrend(highs, lows, closes, period=10, multiplier=3.0):
-    hl2 = (highs + lows) / 2
-    atr = pd.Series([max(highs[i]-lows[i], abs(highs[i]-closes[i-1]), abs(lows[i]-closes[i-1])) for i in range(len(closes))]).rolling(window=period).mean().values
-    lowerband = hl2 - (multiplier * atr)
+# 2. استراتيجية التريند: Squeeze Momentum (الانفجار السعري)
+def calculate_squeeze(highs, lows, closes, period=20, bb_mult=2.0, kc_mult=1.5):
+    df = pd.DataFrame({'high': highs, 'low': lows, 'close': closes})
+    df['sma'] = df['close'].rolling(period).mean()
+    df['std'] = df['close'].rolling(period).std()
     
-    if closes[-1] < lowerband[-1]:
-        return -1
-    else:
-        return 1
+    # Bollinger Bands
+    df['bb_upper'] = df['sma'] + bb_mult * df['std']
+    df['bb_lower'] = df['sma'] - bb_mult * df['std']
+    
+    # Keltner Channel
+    df['tr'] = np.maximum(df['high'] - df['low'], np.maximum(abs(df['high'] - df['close'].shift(1)), abs(df['low'] - df['close'].shift(1))))
+    df['atr'] = df['tr'].rolling(period).mean()
+    df['kc_upper'] = df['sma'] + kc_mult * df['atr']
+    df['kc_lower'] = df['sma'] - kc_mult * df['atr']
+    
+    # Squeeze Condition (مضغوط = داخل القناة، انفجار = خارج القناة)
+    df['squeeze_on'] = (df['bb_lower'] > df['kc_lower']) & (df['bb_upper'] < df['kc_upper'])
+    df['squeeze_off'] = (df['bb_lower'] < df['kc_lower']) | (df['bb_upper'] > df['kc_upper'])
+    df['mom'] = df['close'] - df['sma'] # اتجاه العزم
+    
+    is_sq_off = df['squeeze_off'].iloc[-1]
+    was_sq_on = df['squeeze_on'].iloc[-2] or df['squeeze_on'].iloc[-3] # كان مضغوط وبدأ ينفجر
+    momentum = df['mom'].iloc[-1]
+    
+    return is_sq_off, was_sq_on, momentum
 
 def play_audio_alert():
     audio_html = """
@@ -135,7 +126,7 @@ active_or_failed_symbols = [
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.success("🤖 المراقبة تعمل بدقة (تم فصل حساب الربح عن الصفقات المعلقة).")
+    st.success("🐋 البوت يعمل الآن بمنطق الأموال الذكية (SMC) والانفجارات السعرية.")
     
     symbols = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT']
     scalp_opps = []
@@ -147,59 +138,52 @@ with col1:
             curr_price = ticker_check['last']
             dec = get_decimals(curr_price)
             
-            # 1. فحص الاسكالبينج (5 دقائق)
-            ohlcv_5m = exchange.fetch_ohlcv(symbol, '5m', limit=150)
+            # 1. فحص السكالبينج بـ (FVG - 5m)
+            ohlcv_5m = exchange.fetch_ohlcv(symbol, '5m', limit=100)
             h5 = np.array([c[2] for c in ohlcv_5m])
             l5 = np.array([c[3] for c in ohlcv_5m])
             c5 = np.array([c[4] for c in ohlcv_5m])
             curr = c5[-1]
-            
-            ema20_5 = calculate_ema_series(c5, 20)
-            ema50_5 = calculate_ema_series(c5, 50)
-            macd_5, macds_5 = calculate_macd(c5)
-            rsi_5 = calculate_rsi(c5)
             atr_5 = calculate_atr(h5, l5, c5, 14)
             
-            long_cross_5 = (ema20_5.iloc[-2] <= ema50_5.iloc[-2]) and (ema20_5.iloc[-1] > ema50_5.iloc[-1])
-            short_cross_5 = (ema20_5.iloc[-2] >= ema50_5.iloc[-2]) and (ema20_5.iloc[-1] < ema50_5.iloc[-1])
-            
             if symbol not in active_or_failed_symbols:
-                if long_cross_5 and macd_5 > macds_5 and rsi_5 > 50:
-                    score = min(98, int(85 + (rsi_5 - 50) * 0.3 + abs(macd_5 - macds_5) * 10))
+                fvg_dir, fvg_sl_level = detect_fvg_entry(h5, l5, c5, curr)
+                
+                if fvg_dir == "LONG":
                     scalp_opps.append({
-                        'symbol': symbol, 'direction': '🟢 LONG (Scalp)', 'price': curr, 'score': score,
-                        'buy': round(curr, dec), 'tp1': round(curr * 1.006, dec), 'tp2': round(curr * 1.015, dec), 'sl': round(curr - (1.0 * atr_5), dec)
+                        'symbol': symbol, 'direction': '🟢 LONG (SMC FVG)', 'price': curr, 'score': 95,
+                        'buy': round(curr, dec), 'tp1': round(curr * 1.006, dec), 'tp2': round(curr * 1.015, dec), 
+                        'sl': round(min(curr - (1.0 * atr_5), fvg_sl_level * 0.998), dec) # الوقف تحت الفجوة
                     })
-                elif short_cross_5 and macd_5 < macds_5 and rsi_5 < 50:
-                    score = min(98, int(85 + (50 - rsi_5) * 0.3 + abs(macd_5 - macds_5) * 10))
+                elif fvg_dir == "SHORT":
                     scalp_opps.append({
-                        'symbol': symbol, 'direction': '🔴 SHORT (Scalp)', 'price': curr, 'score': score,
-                        'buy': round(curr, dec), 'tp1': round(curr * 0.994, dec), 'tp2': round(curr * 0.985, dec), 'sl': round(curr + (1.0 * atr_5), dec)
+                        'symbol': symbol, 'direction': '🔴 SHORT (SMC FVG)', 'price': curr, 'score': 95,
+                        'buy': round(curr, dec), 'tp1': round(curr * 0.994, dec), 'tp2': round(curr * 0.985, dec), 
+                        'sl': round(max(curr + (1.0 * atr_5), fvg_sl_level * 1.002), dec) # الوقف فوق الفجوة
                     })
                 
-            # 2. فحص التريند (15 دقيقة)
+            # 2. فحص التريند بـ (Squeeze Momentum - 15m)
             if symbol not in active_or_failed_symbols:
                 ohlcv_15m = exchange.fetch_ohlcv(symbol, '15m', limit=100)
                 h15 = np.array([c[2] for c in ohlcv_15m])
                 l15 = np.array([c[3] for c in ohlcv_15m])
                 c15 = np.array([c[4] for c in ohlcv_15m])
                 curr_15 = c15[-1]
+                atr_15 = calculate_atr(h15, l15, c15, 14)
                 
-                adx_val = calculate_adx(h15, l15, c15, 14)
+                is_sq_off, was_sq_on, mom = calculate_squeeze(h15, l15, c15)
                 
-                if adx_val >= 26:
-                    st_dir = calculate_supertrend(h15, l15, c15)
-                    atr_15 = calculate_atr(h15, l15, c15, 14)
-                    
-                    if st_dir == 1:
+                # الدخول فقط إذا حدث "انفجار سعري" جديد (كان مضغوط ودلوقتي فك)
+                if is_sq_off and was_sq_on:
+                    if mom > 0:
                         trend_opps.append({
-                            'symbol': symbol, 'direction': '📈 LONG (SuperTrend 15m)', 'price': curr_15, 'score': int(70 + adx_val),
-                            'buy': round(curr_15, dec), 'tp1': round(curr_15 * 1.015, dec), 'tp2': round(curr_15 * 1.032, dec), 'sl': round(curr_15 - (1.2 * atr_15), dec)
+                            'symbol': symbol, 'direction': '🚀 LONG (Squeeze Breakout)', 'price': curr_15, 'score': 98,
+                            'buy': round(curr_15, dec), 'tp1': round(curr_15 * 1.015, dec), 'tp2': round(curr_15 * 1.032, dec), 'sl': round(curr_15 - (1.5 * atr_15), dec)
                         })
-                    elif st_dir == -1:
+                    elif mom < 0:
                         trend_opps.append({
-                            'symbol': symbol, 'direction': '📉 SHORT (SuperTrend 15m)', 'price': curr_15, 'score': int(70 + adx_val),
-                            'buy': round(curr_15, dec), 'tp1': round(curr_15 * 0.985, dec), 'tp2': round(curr_15 * 0.968, dec), 'sl': round(curr_15 + (1.2 * atr_15), dec)
+                            'symbol': symbol, 'direction': '💥 SHORT (Squeeze Breakout)', 'price': curr_15, 'score': 98,
+                            'buy': round(curr_15, dec), 'tp1': round(curr_15 * 0.985, dec), 'tp2': round(curr_15 * 0.968, dec), 'sl': round(curr_15 + (1.5 * atr_15), dec)
                         })
         except: continue
             
@@ -221,12 +205,10 @@ with col2:
                         is_long = 'LONG' in t['direction']
                         entry_val = t['entry']
                         
-                        # تفعيل الصفقة المعلقة لو السعر وصل لمستواها
                         if t['status'] == '⏳ معلقة':
                             if (is_long and curr <= entry_val) or (not is_long and curr >= entry_val): 
                                 t['status'] = '🟢 نشطة'
                         
-                        # حساب PnL فقط لو الصفقة نشطة فعلياً
                         if t['status'] != '⏳ معلقة':
                             if is_long:
                                 pnl = ((curr - entry_val) / entry_val) * 100
@@ -287,25 +269,25 @@ with col2:
         save_portfolio([])
         st.success("تم مسح كل الصفقات!")
 
-tab3, tab_trend, tab4 = st.tabs(["⏱️ Scalping (5m)", "🌊 SuperTrend (15m)", "💼 محفظتي (دائمة)"])
+tab3, tab_trend, tab4 = st.tabs(["🐋 Scalping (SMC - FVG)", "🚀 Trend (Squeeze Momentum)", "💼 محفظتي (دائمة)"])
 
 with tab3:
-    st.info("⏱️ إشارات السكالبينج اللحظية.")
+    st.info("🐋 صفقات الأموال الذكية (SMC) - الدخول عند إعادة اختبار فجوات القيمة العادلة (FVG).")
     if not st.session_state.scalping_opps:
-        st.warning("جاري البحث عن فرص سكالبينج...")
+        st.warning("جاري تتبع فجوات الحيتان (لا توجد مناطق FVG نشطة الآن)...")
     else:
         for i, opp in enumerate(st.session_state.scalping_opps, 1):
-            st.markdown(f"**{opp['symbol']}** | {opp['direction']} ({opp['score']}% ⭐️) | دخول: {opp['price']} | TP1: `{opp['tp1']}` | TP2: `{opp['tp2']}` | وقف: `{opp['sl']}`")
-            if st.button(f"➕ تتبع اسكالبينج", key=f"sc_{i}_{opp['symbol']}"): track_trade(opp, 'Scalping')
+            st.markdown(f"**{opp['symbol']}** | {opp['direction']} | دخول: {opp['price']} | TP1: `{opp['tp1']}` | TP2: `{opp['tp2']}` | وقف: `{opp['sl']}`")
+            if st.button(f"➕ تتبع SMC", key=f"sc_{i}_{opp['symbol']}"): track_trade(opp, 'SMC FVG')
 
 with tab_trend:
-    st.info("🌊 صفقات تتبع التريند.")
+    st.info("🚀 صفقات الانفجار السعري (Squeeze Breakout) - اقتناص السعر فور خروجه من التذبذب.")
     if not st.session_state.trend_opps:
-        st.warning("⚠️ لا توجد تريندات متاحة حالياً (تم حجب التذبذب).. تابع السكالبينج بالأسفل!")
+        st.warning("⚠️ السوق إما متذبذب (مضغوط) أو لا يوجد انفجار سعري جديد حالياً. جاري المراقبة...")
     else:
         for i, opp in enumerate(st.session_state.trend_opps, 1):
-            st.markdown(f"**{opp['symbol']}** | {opp['direction']} (قوة اتجاه: {opp['score']} 🚀) | دخول: {opp['price']} | TP1: `{opp['tp1']}` | TP2: `{opp['tp2']}` | وقف: `{opp['sl']}`")
-            if st.button(f"➕ تتبع SuperTrend", key=f"tr_{i}_{opp['symbol']}"): track_trade(opp, 'Trend')
+            st.markdown(f"**{opp['symbol']}** | {opp['direction']} | دخول: {opp['price']} | TP1: `{opp['tp1']}` | TP2: `{opp['tp2']}` | وقف: `{opp['sl']}`")
+            if st.button(f"➕ تتبع Breakout", key=f"tr_{i}_{opp['symbol']}"): track_trade(opp, 'Squeeze Breakout')
 
 with tab4:
     if not st.session_state.tracked_trades: st.warning("المحفظة فارغة.")
@@ -324,7 +306,6 @@ with tab4:
             st.markdown(f"**{t['symbol']}** | نوع: {t['type']} | {t['direction']} | {status_icon} **{t['status']}**")
             st.markdown(f"دخول: {t['entry']} | TP1: {tp1_val} | TP2: {tp2_val} | وقف: {t['sl']}")
             
-            # عرض الحالة اللحظية فقط لو الصفقة نشطة، ولو معلقة نكتب في الانتظار من غير نسبة وهمية
             if t['status'] == '⏳ معلقة':
                 st.markdown("الحالة اللحظية: <span style='color: gray; font-weight: bold;'>في انتظار تفعيل الدخول (معلقة)</span>", unsafe_allow_html=True)
             else:
