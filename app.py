@@ -7,7 +7,7 @@ import json
 import os
 
 st.set_page_config(page_title="Glow Pro SuperTrend Bot", page_icon="📈", layout="wide")
-st.title("📈 تطبيق التوصيات الذكي (مع فلتر قوة الاتجاه ADX لمنع التذبذب)")
+st.title("📈 تطبيق التوصيات الذكي (فصل فلتر التذبذب عن السكالبينج)")
 
 API_KEY = "41e8e6d1-3d2d-4861-b0df-61ccdb79e34b"
 SECRET_KEY = "1FC2FDF62E1F188458144B7700759BC3" 
@@ -73,7 +73,6 @@ def calculate_atr(highs, lows, closes, period=14):
     atr = pd.Series(tr_list).rolling(window=period).mean().iloc[-1]
     return atr if not np.isnan(atr) else (highs[-1] * 0.01)
 
-# دالة حساب مؤشر قوة الاتجاه ADX لتصفية السوق العرضي
 def calculate_adx(highs, lows, closes, period=14):
     df = pd.DataFrame({'high': highs, 'low': lows, 'close': closes})
     df['tr'] = np.maximum(df['high'] - df['low'], np.maximum(abs(df['high'] - df['close'].shift(1)), abs(df['low'] - df['close'].shift(1))))
@@ -136,7 +135,7 @@ recent_failed_symbols = [
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.success("🤖 المراقبة تعمل مع فلتر الـ ADX الذكي لاستبعاد التذبذب.")
+    st.success("🤖 المراقبة تعمل: السكالبينج نشط في التذبذب، والـ SuperTrend محمي بفلتر الاتجاه.")
     
     symbols = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT']
     scalp_opps = []
@@ -148,7 +147,7 @@ with col1:
             curr_price = ticker_check['last']
             dec = get_decimals(curr_price)
             
-            # 1. فحص الاسكالبينج (5 دقائق)
+            # 1. فحص الاسكالبينج (5 دقائق) - يعمل بكامل حريته حتى في التذبذب
             ohlcv_5m = exchange.fetch_ohlcv(symbol, '5m', limit=150)
             h5 = np.array([c[2] for c in ohlcv_5m])
             l5 = np.array([c[3] for c in ohlcv_5m])
@@ -178,7 +177,7 @@ with col1:
                         'buy': round(curr, dec), 'tp1': round(curr * 0.994, dec), 'tp2': round(curr * 0.985, dec), 'sl': round(curr + (1.0 * atr_5), dec)
                     })
                 
-            # 2. فحص التريند (15 دقيقة) مع فلتر قوة الاتجاه ADX
+            # 2. فحص التريند (15 دقيقة) - خاضع لفلتر الـ ADX الصارم
             if symbol not in recent_failed_symbols:
                 ohlcv_15m = exchange.fetch_ohlcv(symbol, '15m', limit=100)
                 h15 = np.array([c[2] for c in ohlcv_15m])
@@ -186,10 +185,8 @@ with col1:
                 c15 = np.array([c[4] for c in ohlcv_15m])
                 curr_15 = c15[-1]
                 
-                # حساب قوة الاتجاه ADX
                 adx_val = calculate_adx(h15, l15, c15, 14)
                 
-                # شرط أساسي: لو الـ ADX أكبر من 20 (يعني فيه اتجاه حقيقي)، نطلع الإشارة. لو أقل، السوق متذبذب نرفضها تماماً!
                 if adx_val >= 20:
                     st_dir = calculate_supertrend(h15, l15, c15)
                     atr_15 = calculate_atr(h15, l15, c15, 14)
@@ -286,9 +283,9 @@ with col2:
 tab3, tab_trend, tab4 = st.tabs(["⏱️ Scalping (5m)", "🌊 SuperTrend (15m)", "💼 محفظتي (دائمة)"])
 
 with tab3:
-    st.info("⏱️ إشارات السكالبينج اللحظية.")
+    st.info("⏱️ إشارات السكالبينج اللحظية (تعمل بحرية في الأسواق المتذبذبة).")
     if not st.session_state.scalping_opps:
-        st.warning("جاري البحث عن فرص سكالبينج دقيقة..")
+        st.warning("جاري البحث عن فرص سكالبينج دقيقة في الشموع اللحظية..")
     else:
         for i, opp in enumerate(st.session_state.scalping_opps, 1):
             st.markdown(f"**{opp['symbol']}** | {opp['direction']} ({opp['score']}% ⭐️) | دخول: {opp['price']} | TP1: `{opp['tp1']}` | TP2: `{opp['tp2']}` | وقف: `{opp['sl']}`")
@@ -297,7 +294,7 @@ with tab3:
 with tab_trend:
     st.info("🌊 صفقات تتبع التريند (محمية بفلتر الـ ADX).")
     if not st.session_state.trend_opps:
-        st.warning("⚠️ السوق حالياً في حالة تذبذب عرضي (ADX < 20).. تم حجب صفقات SuperTrend لمنع الخسائر حتى ينشط اتجاه حقيقي!")
+        st.warning("⚠️ السوق حالياً متذبذب (التريند متوقف).. بينما تبويب السكالبينج يعمل بالأسفل لاصطياد الحركات السريعة!")
     else:
         for i, opp in enumerate(st.session_state.trend_opps, 1):
             st.markdown(f"**{opp['symbol']}** | {opp['direction']} (قوة اتجاه: {opp['score']} 🚀) | دخول: {opp['price']} | TP1: `{opp['tp1']}` | TP2: `{opp['tp2']}` | وقف: `{opp['sl']}`")
