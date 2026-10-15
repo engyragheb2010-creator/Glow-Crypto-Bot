@@ -42,7 +42,6 @@ if 'scalping_opps' not in st.session_state: st.session_state.scalping_opps = []
 if 'trend_opps' not in st.session_state: st.session_state.trend_opps = []
 if 'tracked_trades' not in st.session_state: st.session_state.tracked_trades = load_portfolio()
 
-# دالة لجلب السعر المرجعي (Mark Price) إن وجد، وإلا تستخدم السعر الأخير
 def get_mark_price(exch, sym):
     try:
         ticker = exch.fetch_ticker(sym)
@@ -63,20 +62,30 @@ def calculate_atr(highs, lows, closes, period=14):
     atr = pd.Series(tr_list).rolling(window=period).mean().iloc[-1]
     return atr if not np.isnan(atr) else (highs[-1] * 0.01)
 
-# فلتر الاتجاه العام لمنع التداول عكس السوق في السكالبينج
+# فلتر الاتجاه العام الصارم لمنع التداول عكس السوق في السكالبينج (EMA 50 vs EMA 200)
 def is_trend_favorable(sym, direction):
     try:
-        ohlcv_1h = exchange.fetch_ohlcv(sym, '1h', limit=50)
-        closes_1h = [c[4] for c in ohlcv_1h]
-        sma_50 = sum(closes_1h) / len(closes_1h)
-        current_price = closes_1h[-1]
+        # سحب 250 شمعة لفريم الساعة عشان نقدر نحسب متوسط 200 بدقة
+        ohlcv_1h = exchange.fetch_ohlcv(sym, '1h', limit=250)
+        df_1h = pd.DataFrame(ohlcv_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         
-        if direction == "LONG" and current_price < sma_50:
-            return False # الاتجاه هابط، لا تدخل شراء
-        if direction == "SHORT" and current_price > sma_50:
-            return False # الاتجاه صاعد، لا تدخل بيع
+        # حساب Exponential Moving Average (EMA)
+        df_1h['ema50'] = df_1h['close'].ewm(span=50, adjust=False).mean()
+        df_1h['ema200'] = df_1h['close'].ewm(span=200, adjust=False).mean()
+        
+        ema50_current = df_1h['ema50'].iloc[-1]
+        ema200_current = df_1h['ema200'].iloc[-1]
+        
+        # التقييم الصارم
+        is_uptrend = ema50_current > ema200_current
+        
+        if direction == "LONG" and not is_uptrend:
+            return False # التريند العام هابط، لا تدخل شراء
+        if direction == "SHORT" and is_uptrend:
+            return False # التريند العام صاعد، لا تدخل بيع
+            
         return True
-    except:
+    except Exception as e:
         return True
 
 def detect_fvg_entry(highs, lows, closes, curr_price):
@@ -144,7 +153,6 @@ def track_trade(opp, trade_type):
     save_portfolio(st.session_state.tracked_trades)
     st.toast(f"Added to portfolio!")
 
-# دوال أزرار التحكم الفردية
 def cancel_trade_action(trade_id):
     st.session_state.tracked_trades = [t for t in st.session_state.tracked_trades if t['id'] != trade_id]
     save_portfolio(st.session_state.tracked_trades)
@@ -169,18 +177,19 @@ col1, col2 = st.columns([3, 1])
 with col1:
     st.success("🐋 البوت يعمل الآن بمنطق الأموال الذكية (SMC) والانفجارات السعرية.")
     
-    symbols = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'DOGE/USDT']
+    # 1. تصفية العملات لتشمل الأقوى فقط (بدون DOGE)
+    symbols = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT']
+    
     scalp_opps = []
     trend_opps = []
     
     for symbol in symbols:
         try:
-            # استخدام Mark Price للدقة
             curr_price = get_mark_price(exchange, symbol)
             if curr_price == 0: continue
             dec = get_decimals(curr_price)
             
-            # 1. فحص السكالبينج
+            # فحص السكالبينج (SMC FVG)
             ohlcv_5m = exchange.fetch_ohlcv(symbol, '5m', limit=100)
             h5 = np.array([c[2] for c in ohlcv_5m])
             l5 = np.array([c[3] for c in ohlcv_5m])
@@ -192,7 +201,7 @@ with col1:
                 fvg_dir, fvg_sl_level = detect_fvg_entry(h5, l5, c5, curr)
                 
                 if fvg_dir:
-                    # تفعيل فلتر الاتجاه للسكالبينج
+                    # تفعيل فلتر الاتجاه الصارم للسكالبينج
                     if is_trend_favorable(symbol, fvg_dir):
                         if fvg_dir == "LONG":
                             scalp_opps.append({
@@ -207,7 +216,7 @@ with col1:
                                 'sl': round(max(curr + (1.0 * atr_5), fvg_sl_level * 1.002), dec)
                             })
                 
-            # 2. فحص التريند
+            # فحص التريند (Squeeze Breakout)
             if symbol not in active_or_failed_symbols:
                 ohlcv_15m = exchange.fetch_ohlcv(symbol, '15m', limit=100)
                 h15 = np.array([c[2] for c in ohlcv_15m])
@@ -229,9 +238,22 @@ with col1:
                             'symbol': symbol, 'direction': '💥 SHORT (Squeeze Breakout)', 'price': curr_15, 'score': 98,
                             'buy': round(curr_15, dec), 'tp1': round(curr_15 * 0.985, dec), 'tp2': round(curr_15 * 0.968, dec), 'sl': round(curr_15 + (1.5 * atr_15), dec)
                         })
-        except: continue
+        except Exception as e: 
+            continue
             
-    if (scalp_opps or trend_opps) and (len(scalp_opps) != len(st.session_state.scalping_opps)):
+    # لوجيك التنبيهات المحدث
+    new_opportunities_found = False
+    
+    # مقارنة الفرص الحالية بالفرص في الجلسة السابقة
+    current_opp_symbols = [opp['symbol'] for opp in scalp_opps + trend_opps]
+    previous_opp_symbols = [opp['symbol'] for opp in st.session_state.scalping_opps + st.session_state.trend_opps]
+    
+    for sym in current_opp_symbols:
+        if sym not in previous_opp_symbols:
+            new_opportunities_found = True
+            st.toast(f"🔔 فرصة جديدة تم رصدها على {sym}!", icon="🎯")
+            
+    if new_opportunities_found:
         play_audio_alert()
         
     st.session_state.scalping_opps = scalp_opps
@@ -244,7 +266,6 @@ with col2:
             for t in st.session_state.tracked_trades:
                 if t['status'] in [PENDING, ACTIVE, SECURED]:
                     try:
-                        # استخدام السعر المرجعي Mark Price
                         curr = get_mark_price(exchange, t['symbol'])
                         is_long = 'LONG' in t['direction']
                         entry_val = t['entry']
@@ -352,7 +373,6 @@ with tab4:
             
             if t['status'] == PENDING:
                 st.markdown("Status: <span style='color: gray; font-weight: bold;'>Waiting for Entry</span>", unsafe_allow_html=True)
-                # زرار الإلغاء للأوامر المعلقة
                 if st.button('❌ Cancel Order', key=f"cancel_{t['id']}"):
                     cancel_trade_action(t['id'])
                     st.rerun()
@@ -362,7 +382,6 @@ with tab4:
                 pnl_text = f"PnL: +{pnl_val}%" if pnl_val >= 0 else f"PnL: {pnl_val}%"
                 st.markdown(f"Live PnL: <span style='{color_style} font-weight: bold;'>{pnl_text}</span>", unsafe_allow_html=True)
                 
-                # زرار الإغلاق الفوري للصفقات النشطة أو المؤمنة
                 if t['status'] in [ACTIVE, SECURED]:
                     if st.button('⏹️ Close at Market', key=f"close_{t['id']}"):
                         close_trade_action(t['id'], t['symbol'], t['direction'], t['entry'])
@@ -372,3 +391,5 @@ with tab4:
 
 time.sleep(60)
 st.rerun()
+
+
