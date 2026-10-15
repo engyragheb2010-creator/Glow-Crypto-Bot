@@ -13,6 +13,15 @@ API_KEY = "41e8e6d1-3d2d-4861-b0df-61ccdb79e34b"
 SECRET_KEY = "1FC2FDF62E1F188458144B7700759BC3" 
 PASSPHRASE = 'Ahmedengy2010@'
 
+# --- English Status Labels ---
+PENDING = '⏳ Pending'
+ACTIVE = '🟢 Active'
+SECURED = '🎯 Secured (TP1 Hit)'
+CLOSED_TP2 = '🏆 Closed (Hit TP2)'
+CLOSED_SL = '🛑 Closed (Hit SL)'
+CLOSED_BE = '🛡️ Closed (Breakeven)'
+CLOSED_MANUAL = '⏹️ Closed (Manual)'
+
 @st.cache_resource
 def get_exchange():
     return ccxt.okx({'enableRateLimit': True})
@@ -33,6 +42,17 @@ if 'scalping_opps' not in st.session_state: st.session_state.scalping_opps = []
 if 'trend_opps' not in st.session_state: st.session_state.trend_opps = []
 if 'tracked_trades' not in st.session_state: st.session_state.tracked_trades = load_portfolio()
 
+# دالة لجلب السعر المرجعي (Mark Price) إن وجد، وإلا تستخدم السعر الأخير
+def get_mark_price(exch, sym):
+    try:
+        ticker = exch.fetch_ticker(sym)
+        mark = ticker.get('mark')
+        if mark is None:
+            mark = ticker.get('info', {}).get('markPx')
+        return float(mark) if mark is not None else ticker['last']
+    except:
+        return 0
+
 def calculate_atr(highs, lows, closes, period=14):
     tr_list = [highs[0] - lows[0]]
     for i in range(1, len(closes)):
@@ -43,50 +63,55 @@ def calculate_atr(highs, lows, closes, period=14):
     atr = pd.Series(tr_list).rolling(window=period).mean().iloc[-1]
     return atr if not np.isnan(atr) else (highs[-1] * 0.01)
 
-# 1. استراتيجية السكالبينج: FVG (Fair Value Gap)
+# فلتر الاتجاه العام لمنع التداول عكس السوق في السكالبينج
+def is_trend_favorable(sym, direction):
+    try:
+        ohlcv_1h = exchange.fetch_ohlcv(sym, '1h', limit=50)
+        closes_1h = [c[4] for c in ohlcv_1h]
+        sma_50 = sum(closes_1h) / len(closes_1h)
+        current_price = closes_1h[-1]
+        
+        if direction == "LONG" and current_price < sma_50:
+            return False # الاتجاه هابط، لا تدخل شراء
+        if direction == "SHORT" and current_price > sma_50:
+            return False # الاتجاه صاعد، لا تدخل بيع
+        return True
+    except:
+        return True
+
 def detect_fvg_entry(highs, lows, closes, curr_price):
-    # نبحث في آخر 10 شموع عن فجوة سعرية تركها الحيتان
     for i in range(len(closes)-2, len(closes)-10, -1):
-        # FVG شرائي (Bullish)
         if lows[i] > highs[i-2]:
             fvg_top = lows[i]
             fvg_bottom = highs[i-2]
-            # الدخول لو السعر الحالي نزل يختبر الفجوة
             if fvg_bottom <= curr_price <= fvg_top:
                 return "LONG", fvg_bottom
-        
-        # FVG بيعي (Bearish)
         elif highs[i] < lows[i-2]:
             fvg_bottom = highs[i]
             fvg_top = lows[i-2]
-            # الدخول لو السعر الحالي صعد يختبر الفجوة
             if fvg_bottom <= curr_price <= fvg_top:
                 return "SHORT", fvg_top
     return None, 0
 
-# 2. استراتيجية التريند: Squeeze Momentum (الانفجار السعري)
 def calculate_squeeze(highs, lows, closes, period=20, bb_mult=2.0, kc_mult=1.5):
     df = pd.DataFrame({'high': highs, 'low': lows, 'close': closes})
     df['sma'] = df['close'].rolling(period).mean()
     df['std'] = df['close'].rolling(period).std()
     
-    # Bollinger Bands
     df['bb_upper'] = df['sma'] + bb_mult * df['std']
     df['bb_lower'] = df['sma'] - bb_mult * df['std']
     
-    # Keltner Channel
     df['tr'] = np.maximum(df['high'] - df['low'], np.maximum(abs(df['high'] - df['close'].shift(1)), abs(df['low'] - df['close'].shift(1))))
     df['atr'] = df['tr'].rolling(period).mean()
     df['kc_upper'] = df['sma'] + kc_mult * df['atr']
     df['kc_lower'] = df['sma'] - kc_mult * df['atr']
     
-    # Squeeze Condition (مضغوط = داخل القناة، انفجار = خارج القناة)
     df['squeeze_on'] = (df['bb_lower'] > df['kc_lower']) & (df['bb_upper'] < df['kc_upper'])
     df['squeeze_off'] = (df['bb_lower'] < df['kc_lower']) | (df['bb_upper'] > df['kc_upper'])
-    df['mom'] = df['close'] - df['sma'] # اتجاه العزم
+    df['mom'] = df['close'] - df['sma'] 
     
     is_sq_off = df['squeeze_off'].iloc[-1]
-    was_sq_on = df['squeeze_on'].iloc[-2] or df['squeeze_on'].iloc[-3] # كان مضغوط وبدأ ينفجر
+    was_sq_on = df['squeeze_on'].iloc[-2] or df['squeeze_on'].iloc[-3] 
     momentum = df['mom'].iloc[-1]
     
     return is_sq_off, was_sq_on, momentum
@@ -106,22 +131,38 @@ def get_decimals(price):
 
 def track_trade(opp, trade_type):
     for t in st.session_state.tracked_trades:
-        if t['symbol'] == opp['symbol'] and t['status'] in ['⏳ معلقة', '🟢 نشطة', '🎯 تم تحقيق TP1 (مؤمنة)']:
-            st.toast(f"الصفقة موجودة بالفعل!")
+        if t['symbol'] == opp['symbol'] and t['status'] in [PENDING, ACTIVE, SECURED]:
+            st.toast(f"Trade already exists!")
             return
     new_trade = {
         'id': f"{opp['symbol']}_{time.time()}", 'symbol': opp['symbol'], 'type': trade_type,
         'direction': opp.get('direction', '🟢 LONG'), 'entry': opp['buy'], 
         'tp1': opp['tp1'], 'tp2': opp['tp2'], 'sl': opp['sl'], 
-        'status': '⏳ معلقة', 'secured': False, 'pnl_pct': 0.0
+        'status': PENDING, 'secured': False, 'pnl_pct': 0.0
     }
     st.session_state.tracked_trades.append(new_trade)
     save_portfolio(st.session_state.tracked_trades)
-    st.toast(f"تمت الإضافة بنجاح للمحفظة!")
+    st.toast(f"Added to portfolio!")
+
+# دوال أزرار التحكم الفردية
+def cancel_trade_action(trade_id):
+    st.session_state.tracked_trades = [t for t in st.session_state.tracked_trades if t['id'] != trade_id]
+    save_portfolio(st.session_state.tracked_trades)
+
+def close_trade_action(trade_id, symbol, direction, entry_val):
+    curr_price = get_mark_price(exchange, symbol)
+    for t in st.session_state.tracked_trades:
+        if t['id'] == trade_id:
+            t['status'] = CLOSED_MANUAL
+            is_long = 'LONG' in direction
+            pnl = ((curr_price - entry_val) / entry_val) * 100 if is_long else ((entry_val - curr_price) / entry_val) * 100
+            t['pnl_pct'] = round(pnl, 2)
+            break
+    save_portfolio(st.session_state.tracked_trades)
 
 active_or_failed_symbols = [
     t['symbol'] for t in st.session_state.tracked_trades 
-    if t['status'] in ['⏳ معلقة', '🟢 نشطة', '🎯 تم تحقيق TP1 (مؤمنة)'] or 'خسارة' in t['status'] or 'Hit SL' in t['status']
+    if t['status'] in [PENDING, ACTIVE, SECURED] or 'Closed' in t['status']
 ]
 
 col1, col2 = st.columns([3, 1])
@@ -134,11 +175,12 @@ with col1:
     
     for symbol in symbols:
         try:
-            ticker_check = exchange.fetch_ticker(symbol)
-            curr_price = ticker_check['last']
+            # استخدام Mark Price للدقة
+            curr_price = get_mark_price(exchange, symbol)
+            if curr_price == 0: continue
             dec = get_decimals(curr_price)
             
-            # 1. فحص السكالبينج بـ (FVG - 5m)
+            # 1. فحص السكالبينج
             ohlcv_5m = exchange.fetch_ohlcv(symbol, '5m', limit=100)
             h5 = np.array([c[2] for c in ohlcv_5m])
             l5 = np.array([c[3] for c in ohlcv_5m])
@@ -149,20 +191,23 @@ with col1:
             if symbol not in active_or_failed_symbols:
                 fvg_dir, fvg_sl_level = detect_fvg_entry(h5, l5, c5, curr)
                 
-                if fvg_dir == "LONG":
-                    scalp_opps.append({
-                        'symbol': symbol, 'direction': '🟢 LONG (SMC FVG)', 'price': curr, 'score': 95,
-                        'buy': round(curr, dec), 'tp1': round(curr * 1.006, dec), 'tp2': round(curr * 1.015, dec), 
-                        'sl': round(min(curr - (1.0 * atr_5), fvg_sl_level * 0.998), dec) # الوقف تحت الفجوة
-                    })
-                elif fvg_dir == "SHORT":
-                    scalp_opps.append({
-                        'symbol': symbol, 'direction': '🔴 SHORT (SMC FVG)', 'price': curr, 'score': 95,
-                        'buy': round(curr, dec), 'tp1': round(curr * 0.994, dec), 'tp2': round(curr * 0.985, dec), 
-                        'sl': round(max(curr + (1.0 * atr_5), fvg_sl_level * 1.002), dec) # الوقف فوق الفجوة
-                    })
+                if fvg_dir:
+                    # تفعيل فلتر الاتجاه للسكالبينج
+                    if is_trend_favorable(symbol, fvg_dir):
+                        if fvg_dir == "LONG":
+                            scalp_opps.append({
+                                'symbol': symbol, 'direction': '🟢 LONG (SMC FVG)', 'price': curr, 'score': 95,
+                                'buy': round(curr, dec), 'tp1': round(curr * 1.006, dec), 'tp2': round(curr * 1.015, dec), 
+                                'sl': round(min(curr - (1.0 * atr_5), fvg_sl_level * 0.998), dec)
+                            })
+                        elif fvg_dir == "SHORT":
+                            scalp_opps.append({
+                                'symbol': symbol, 'direction': '🔴 SHORT (SMC FVG)', 'price': curr, 'score': 95,
+                                'buy': round(curr, dec), 'tp1': round(curr * 0.994, dec), 'tp2': round(curr * 0.985, dec), 
+                                'sl': round(max(curr + (1.0 * atr_5), fvg_sl_level * 1.002), dec)
+                            })
                 
-            # 2. فحص التريند بـ (Squeeze Momentum - 15m)
+            # 2. فحص التريند
             if symbol not in active_or_failed_symbols:
                 ohlcv_15m = exchange.fetch_ohlcv(symbol, '15m', limit=100)
                 h15 = np.array([c[2] for c in ohlcv_15m])
@@ -173,7 +218,6 @@ with col1:
                 
                 is_sq_off, was_sq_on, mom = calculate_squeeze(h15, l15, c15)
                 
-                # الدخول فقط إذا حدث "انفجار سعري" جديد (كان مضغوط ودلوقتي فك)
                 if is_sq_off and was_sq_on:
                     if mom > 0:
                         trend_opps.append({
@@ -194,80 +238,80 @@ with col1:
     st.session_state.trend_opps = trend_opps
 
 with col2:
-    if st.button('🔄 تحديث المحفظة وفحص الأرباح'):
-        with st.spinner('جاري فحص حالة الأوامر والأسعار...'):
+    if st.button('🔄 Update / Check PnL'):
+        with st.spinner('Checking Mark Prices...'):
             report_logs = []
             for t in st.session_state.tracked_trades:
-                if t['status'] in ['⏳ معلقة', '🟢 نشطة', '🎯 تم تحقيق TP1 (مؤمنة)']:
+                if t['status'] in [PENDING, ACTIVE, SECURED]:
                     try:
-                        ticker = exchange.fetch_ticker(t['symbol'])
-                        curr = ticker['last']
+                        # استخدام السعر المرجعي Mark Price
+                        curr = get_mark_price(exchange, t['symbol'])
                         is_long = 'LONG' in t['direction']
                         entry_val = t['entry']
                         
-                        if t['status'] == '⏳ معلقة':
+                        if t['status'] == PENDING:
                             if (is_long and curr <= entry_val) or (not is_long and curr >= entry_val): 
-                                t['status'] = '🟢 نشطة'
+                                t['status'] = ACTIVE
                         
-                        if t['status'] != '⏳ معلقة':
+                        if t['status'] != PENDING:
                             if is_long:
                                 pnl = ((curr - entry_val) / entry_val) * 100
                             else:
                                 pnl = ((entry_val - curr) / entry_val) * 100
                             t['pnl_pct'] = round(pnl, 2)
-                            pnl_label = f"ربح: +{t['pnl_pct']}%" if t['pnl_pct'] >= 0 else f"خسارة: {t['pnl_pct']}%"
-                            report_logs.append(f"عملة: {t['symbol']} | السعر: {curr} | الحالة: {pnl_label}")
+                            pnl_label = f"PnL: +{t['pnl_pct']}%" if t['pnl_pct'] >= 0 else f"PnL: {t['pnl_pct']}%"
+                            report_logs.append(f"{t['symbol']} | Price: {curr} | {pnl_label}")
                         else:
                             t['pnl_pct'] = 0.0
-                            report_logs.append(f"عملة: {t['symbol']} | السعر: {curr} | الحالة: ⏳ معلقة في الانتظار")
+                            report_logs.append(f"{t['symbol']} | Price: {curr} | ⏳ Pending")
                         
                         tp1 = t.get('tp1', t.get('tp', 0))
                         tp2 = t.get('tp2', t.get('tp', 0))
                         
-                        if t['status'] in ['🟢 نشطة', '🎯 تم تحقيق TP1 (مؤمنة)']:
+                        if t['status'] in [ACTIVE, SECURED]:
                             if is_long:
-                                if curr >= tp1 and t['status'] == '🟢 نشطة':
-                                    t['status'] = '🎯 تم تحقيق TP1 (مؤمنة)'
+                                if curr >= tp1 and t['status'] == ACTIVE:
+                                    t['status'] = SECURED
                                     t['sl'] = entry_val
                                     t['secured'] = True
                                 elif curr >= tp2: 
-                                    t['status'] = '🎯 ربح كامل (Hit TP2)'
+                                    t['status'] = CLOSED_TP2
                                 elif curr <= t['sl']: 
-                                    t['status'] = '🛑 خسارة (Hit SL)' if not t.get('secured', False) else '🛡️ خروج بربح TP1 (بعد تأمين الوقف)'
+                                    t['status'] = CLOSED_SL if not t.get('secured', False) else CLOSED_BE
                             else:
-                                if curr <= tp1 and t['status'] == '🟢 نشطة':
-                                    t['status'] = '🎯 تم تحقيق TP1 (مؤمنة)'
+                                if curr <= tp1 and t['status'] == ACTIVE:
+                                    t['status'] = SECURED
                                     t['sl'] = entry_val
                                     t['secured'] = True
                                 elif curr <= tp2: 
-                                    t['status'] = '🎯 ربح كامل (Hit TP2)'
+                                    t['status'] = CLOSED_TP2
                                 elif curr >= t['sl']: 
-                                    t['status'] = '🛑 خسارة (Hit SL)' if not t.get('secured', False) else '🛡️ خروج بربح TP1 (بعد تأمين الوقف)'
+                                    t['status'] = CLOSED_SL if not t.get('secured', False) else CLOSED_BE
                     except: pass
             save_portfolio(st.session_state.tracked_trades)
             st.session_state.report_logs = report_logs
-        st.success("تم التحديث بنجاح!")
+        st.success("Updated successfully!")
         
     if 'report_logs' in st.session_state and st.session_state.report_logs:
-        with st.expander("📊 تقرير الأرباح والفحص الفوري", expanded=True):
+        with st.expander("📊 Live PnL Report", expanded=True):
             for log in st.session_state.report_logs:
-                if "ربح" in log:
+                if "+" in log:
                     st.markdown(f"<p style='color:green; font-weight:bold;'>{log}</p>", unsafe_allow_html=True)
-                elif "معلقة" in log:
+                elif "Pending" in log:
                     st.markdown(f"<p style='color:gray; font-weight:bold;'>{log}</p>", unsafe_allow_html=True)
                 else:
                     st.markdown(f"<p style='color:red; font-weight:bold;'>{log}</p>", unsafe_allow_html=True)
         
     st.markdown("---")
-    if st.button('🧹 مسح الصفقات المغلقة'):
-        st.session_state.tracked_trades = [t for t in st.session_state.tracked_trades if not any(w in t['status'] for w in ['ربح كامل', 'خسارة', 'خروج بربح'])]
+    if st.button('🧹 Clear Closed Trades'):
+        st.session_state.tracked_trades = [t for t in st.session_state.tracked_trades if 'Closed' not in t['status']]
         save_portfolio(st.session_state.tracked_trades)
-        st.success("تم تنظيف المحفظة!")
+        st.success("Cleaned!")
         
-    if st.button('🧨 تصفير المحفظة بالكامل'):
+    if st.button('🧨 Reset All'):
         st.session_state.tracked_trades = []
         save_portfolio([])
-        st.success("تم مسح كل الصفقات!")
+        st.success("Reset Complete!")
 
 tab3, tab_trend, tab4 = st.tabs(["🐋 Scalping (SMC - FVG)", "🚀 Trend (Squeeze Momentum)", "💼 محفظتي (دائمة)"])
 
@@ -278,7 +322,7 @@ with tab3:
     else:
         for i, opp in enumerate(st.session_state.scalping_opps, 1):
             st.markdown(f"**{opp['symbol']}** | {opp['direction']} | دخول: {opp['price']} | TP1: `{opp['tp1']}` | TP2: `{opp['tp2']}` | وقف: `{opp['sl']}`")
-            if st.button(f"➕ تتبع SMC", key=f"sc_{i}_{opp['symbol']}"): track_trade(opp, 'SMC FVG')
+            if st.button(f"➕ Add SMC Trade", key=f"sc_{i}_{opp['symbol']}"): track_trade(opp, 'SMC FVG')
 
 with tab_trend:
     st.info("🚀 صفقات الانفجار السعري (Squeeze Breakout) - اقتناص السعر فور خروجه من التذبذب.")
@@ -287,32 +331,42 @@ with tab_trend:
     else:
         for i, opp in enumerate(st.session_state.trend_opps, 1):
             st.markdown(f"**{opp['symbol']}** | {opp['direction']} | دخول: {opp['price']} | TP1: `{opp['tp1']}` | TP2: `{opp['tp2']}` | وقف: `{opp['sl']}`")
-            if st.button(f"➕ تتبع Breakout", key=f"tr_{i}_{opp['symbol']}"): track_trade(opp, 'Squeeze Breakout')
+            if st.button(f"➕ Add Breakout Trade", key=f"tr_{i}_{opp['symbol']}"): track_trade(opp, 'Squeeze Breakout')
 
 with tab4:
-    if not st.session_state.tracked_trades: st.warning("المحفظة فارغة.")
+    if not st.session_state.tracked_trades: st.warning("Portfolio is Empty.")
     else:
         for t in reversed(st.session_state.tracked_trades):
             status_icon = "⚪"
-            if "نشطة" in t['status']: status_icon = "🟢"
-            elif "TP1" in t['status']: status_icon = "🎯"
-            elif "ربح كامل" in t['status']: status_icon = "🏆"
-            elif "خسارة" in t['status']: status_icon = "🛑"
-            elif "حماية" in t['status'] or "بربح" in t['status']: status_icon = "🛡️"
+            if "Active" in t['status']: status_icon = "🟢"
+            elif "Secured" in t['status']: status_icon = "🎯"
+            elif "TP2" in t['status']: status_icon = "🏆"
+            elif "Hit SL" in t['status']: status_icon = "🛑"
+            elif "Breakeven" in t['status'] or "Manual" in t['status']: status_icon = "🛡️"
             
             tp1_val = t.get('tp1', t.get('tp', 0))
             tp2_val = t.get('tp2', t.get('tp', 0))
             
-            st.markdown(f"**{t['symbol']}** | نوع: {t['type']} | {t['direction']} | {status_icon} **{t['status']}**")
-            st.markdown(f"دخول: {t['entry']} | TP1: {tp1_val} | TP2: {tp2_val} | وقف: {t['sl']}")
+            st.markdown(f"**{t['symbol']}** | Type: {t['type']} | {t['direction']} | {status_icon} **{t['status']}**")
+            st.markdown(f"Entry: {t['entry']} | TP1: {tp1_val} | TP2: {tp2_val} | SL: {t['sl']}")
             
-            if t['status'] == '⏳ معلقة':
-                st.markdown("الحالة اللحظية: <span style='color: gray; font-weight: bold;'>في انتظار تفعيل الدخول (معلقة)</span>", unsafe_allow_html=True)
+            if t['status'] == PENDING:
+                st.markdown("Status: <span style='color: gray; font-weight: bold;'>Waiting for Entry</span>", unsafe_allow_html=True)
+                # زرار الإلغاء للأوامر المعلقة
+                if st.button('❌ Cancel Order', key=f"cancel_{t['id']}"):
+                    cancel_trade_action(t['id'])
+                    st.rerun()
             else:
                 pnl_val = t.get('pnl_pct', 0.0)
                 color_style = "color: green;" if pnl_val >= 0 else "color: red;"
-                pnl_text = f"ربح: +{pnl_val}%" if pnl_val >= 0 else f"خسارة: {pnl_val}%"
-                st.markdown(f"الحالة اللحظية: <span style='{color_style} font-weight: bold;'>{pnl_text}</span>", unsafe_allow_html=True)
+                pnl_text = f"PnL: +{pnl_val}%" if pnl_val >= 0 else f"PnL: {pnl_val}%"
+                st.markdown(f"Live PnL: <span style='{color_style} font-weight: bold;'>{pnl_text}</span>", unsafe_allow_html=True)
+                
+                # زرار الإغلاق الفوري للصفقات النشطة أو المؤمنة
+                if t['status'] in [ACTIVE, SECURED]:
+                    if st.button('⏹️ Close at Market', key=f"close_{t['id']}"):
+                        close_trade_action(t['id'], t['symbol'], t['direction'], t['entry'])
+                        st.rerun()
                 
             st.markdown("---")
 
