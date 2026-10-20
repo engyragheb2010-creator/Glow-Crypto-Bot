@@ -5,6 +5,7 @@ import pandas as pd
 import time
 import json
 import os
+from datetime import datetime
 
 st.set_page_config(page_title="Glow Pro Smart Money Bot", page_icon="🐋", layout="wide")
 st.title("🐋 تطبيق التداول المؤسسي (SMC & Squeeze Momentum)")
@@ -62,31 +63,44 @@ def calculate_atr(highs, lows, closes, period=14):
     atr = pd.Series(tr_list).rolling(window=period).mean().iloc[-1]
     return atr if not np.isnan(atr) else (highs[-1] * 0.01)
 
-# فلتر الاتجاه العام الصارم لمنع التداول عكس السوق في السكالبينج (EMA 50 vs EMA 200)
+# --- الفلاتر الجديدة (وقت وسيولة) ---
+def is_tradable_time():
+    current_time = datetime.utcnow()
+    if current_time.weekday() in [5, 6]: 
+        return False
+    return True
+
+def is_high_volume(volumes, period=20):
+    if len(volumes) < period + 1:
+        return True
+    avg_volume = np.mean(volumes[-(period+1):-1])
+    current_volume = volumes[-1]
+    return current_volume >= (avg_volume * 0.8)
+
+# --- فلتر الاتجاه العام الصارم (التعديل الجديد) ---
 def is_trend_favorable(sym, direction):
     try:
-        # سحب 250 شمعة لفريم الساعة عشان نقدر نحسب متوسط 200 بدقة
-        ohlcv_1h = exchange.fetch_ohlcv(sym, '1h', limit=250)
-        df_1h = pd.DataFrame(ohlcv_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        # التعديل 1: قراءة التريند الكاسح من فريم 4 ساعات بدل ساعة
+        ohlcv_4h = exchange.fetch_ohlcv(sym, '4h', limit=250)
+        df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         
-        # حساب Exponential Moving Average (EMA)
-        df_1h['ema50'] = df_1h['close'].ewm(span=50, adjust=False).mean()
-        df_1h['ema200'] = df_1h['close'].ewm(span=200, adjust=False).mean()
+        df_4h['ema50'] = df_4h['close'].ewm(span=50, adjust=False).mean()
+        df_4h['ema200'] = df_4h['close'].ewm(span=200, adjust=False).mean()
         
-        ema50_current = df_1h['ema50'].iloc[-1]
-        ema200_current = df_1h['ema200'].iloc[-1]
+        ema50_current = df_4h['ema50'].iloc[-1]
+        ema200_current = df_4h['ema200'].iloc[-1]
         
-        # التقييم الصارم
         is_uptrend = ema50_current > ema200_current
         
         if direction == "LONG" and not is_uptrend:
-            return False # التريند العام هابط، لا تدخل شراء
+            return False 
         if direction == "SHORT" and is_uptrend:
-            return False # التريند العام صاعد، لا تدخل بيع
+            return False 
             
         return True
     except Exception as e:
-        return True
+        # التعديل 2: لو حصل خطأ أو المنصة معلقت، ارفض الصفقة فوراً للحماية
+        return False
 
 def detect_fvg_entry(highs, lows, closes, curr_price):
     for i in range(len(closes)-2, len(closes)-10, -1):
@@ -175,9 +189,8 @@ active_or_failed_symbols = [
 
 col1, col2 = st.columns([3, 1])
 with col1:
-    st.success("🐋 البوت يعمل الآن بمنطق الأموال الذكية (SMC) والانفجارات السعرية.")
+    st.success("🐋 البوت محمي بفلتر اتجاه صارم على فريم 4 ساعات ومضاد للصفقات العكسية.")
     
-    # 1. تصفية العملات لتشمل الأقوى فقط (بدون DOGE)
     symbols = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT']
     
     scalp_opps = []
@@ -189,11 +202,12 @@ with col1:
             if curr_price == 0: continue
             dec = get_decimals(curr_price)
             
-            # فحص السكالبينج (SMC FVG)
+            # --- فحص السكالبينج (SMC FVG) ---
             ohlcv_5m = exchange.fetch_ohlcv(symbol, '5m', limit=100)
             h5 = np.array([c[2] for c in ohlcv_5m])
             l5 = np.array([c[3] for c in ohlcv_5m])
             c5 = np.array([c[4] for c in ohlcv_5m])
+            v5 = np.array([c[5] for c in ohlcv_5m]) 
             curr = c5[-1]
             atr_5 = calculate_atr(h5, l5, c5, 14)
             
@@ -201,8 +215,7 @@ with col1:
                 fvg_dir, fvg_sl_level = detect_fvg_entry(h5, l5, c5, curr)
                 
                 if fvg_dir:
-                    # تفعيل فلتر الاتجاه الصارم للسكالبينج
-                    if is_trend_favorable(symbol, fvg_dir):
+                    if is_tradable_time() and is_high_volume(v5) and is_trend_favorable(symbol, fvg_dir):
                         if fvg_dir == "LONG":
                             scalp_opps.append({
                                 'symbol': symbol, 'direction': '🟢 LONG (SMC FVG)', 'price': curr, 'score': 95,
@@ -216,35 +229,37 @@ with col1:
                                 'sl': round(max(curr + (1.0 * atr_5), fvg_sl_level * 1.002), dec)
                             })
                 
-            # فحص التريند (Squeeze Breakout)
+            # --- فحص التريند (Squeeze Breakout) ---
             if symbol not in active_or_failed_symbols:
                 ohlcv_15m = exchange.fetch_ohlcv(symbol, '15m', limit=100)
                 h15 = np.array([c[2] for c in ohlcv_15m])
                 l15 = np.array([c[3] for c in ohlcv_15m])
                 c15 = np.array([c[4] for c in ohlcv_15m])
+                v15 = np.array([c[5] for c in ohlcv_15m]) 
                 curr_15 = c15[-1]
                 atr_15 = calculate_atr(h15, l15, c15, 14)
                 
                 is_sq_off, was_sq_on, mom = calculate_squeeze(h15, l15, c15)
                 
                 if is_sq_off and was_sq_on:
-                    if mom > 0:
-                        trend_opps.append({
-                            'symbol': symbol, 'direction': '🚀 LONG (Squeeze Breakout)', 'price': curr_15, 'score': 98,
-                            'buy': round(curr_15, dec), 'tp1': round(curr_15 * 1.015, dec), 'tp2': round(curr_15 * 1.032, dec), 'sl': round(curr_15 - (1.5 * atr_15), dec)
-                        })
-                    elif mom < 0:
-                        trend_opps.append({
-                            'symbol': symbol, 'direction': '💥 SHORT (Squeeze Breakout)', 'price': curr_15, 'score': 98,
-                            'buy': round(curr_15, dec), 'tp1': round(curr_15 * 0.985, dec), 'tp2': round(curr_15 * 0.968, dec), 'sl': round(curr_15 + (1.5 * atr_15), dec)
-                        })
+                    # تطبيق فلتر الاتجاه الصارم هنا أيضاً لحماية السكويز
+                    sq_dir = "LONG" if mom > 0 else "SHORT"
+                    if is_tradable_time() and is_high_volume(v15) and is_trend_favorable(symbol, sq_dir):
+                        if mom > 0:
+                            trend_opps.append({
+                                'symbol': symbol, 'direction': '🚀 LONG (Squeeze Breakout)', 'price': curr_15, 'score': 98,
+                                'buy': round(curr_15, dec), 'tp1': round(curr_15 * 1.015, dec), 'tp2': round(curr_15 * 1.032, dec), 'sl': round(curr_15 - (1.5 * atr_15), dec)
+                            })
+                        elif mom < 0:
+                            trend_opps.append({
+                                'symbol': symbol, 'direction': '💥 SHORT (Squeeze Breakout)', 'price': curr_15, 'score': 98,
+                                'buy': round(curr_15, dec), 'tp1': round(curr_15 * 0.985, dec), 'tp2': round(curr_15 * 0.968, dec), 'sl': round(curr_15 + (1.5 * atr_15), dec)
+                            })
         except Exception as e: 
             continue
             
-    # لوجيك التنبيهات المحدث
     new_opportunities_found = False
     
-    # مقارنة الفرص الحالية بالفرص في الجلسة السابقة
     current_opp_symbols = [opp['symbol'] for opp in scalp_opps + trend_opps]
     previous_opp_symbols = [opp['symbol'] for opp in st.session_state.scalping_opps + st.session_state.trend_opps]
     
@@ -339,7 +354,7 @@ tab3, tab_trend, tab4 = st.tabs(["🐋 Scalping (SMC - FVG)", "🚀 Trend (Squee
 with tab3:
     st.info("🐋 صفقات الأموال الذكية (SMC) - الدخول عند إعادة اختبار فجوات القيمة العادلة (FVG).")
     if not st.session_state.scalping_opps:
-        st.warning("جاري تتبع فجوات الحيتان (لا توجد مناطق FVG نشطة الآن)...")
+        st.warning("جاري تتبع فجوات الحيتان (لا توجد مناطق FVG متوافقة مع التريند حالياً)...")
     else:
         for i, opp in enumerate(st.session_state.scalping_opps, 1):
             st.markdown(f"**{opp['symbol']}** | {opp['direction']} | دخول: {opp['price']} | TP1: `{opp['tp1']}` | TP2: `{opp['tp2']}` | وقف: `{opp['sl']}`")
@@ -348,7 +363,7 @@ with tab3:
 with tab_trend:
     st.info("🚀 صفقات الانفجار السعري (Squeeze Breakout) - اقتناص السعر فور خروجه من التذبذب.")
     if not st.session_state.trend_opps:
-        st.warning("⚠️ السوق إما متذبذب (مضغوط) أو لا يوجد انفجار سعري جديد حالياً. جاري المراقبة...")
+        st.warning("⚠️ لا توجد انفجارات سعرية متوافقة مع اتجاه السوق حالياً. جاري المراقبة...")
     else:
         for i, opp in enumerate(st.session_state.trend_opps, 1):
             st.markdown(f"**{opp['symbol']}** | {opp['direction']} | دخول: {opp['price']} | TP1: `{opp['tp1']}` | TP2: `{opp['tp2']}` | وقف: `{opp['sl']}`")
@@ -391,5 +406,3 @@ with tab4:
 
 time.sleep(60)
 st.rerun()
-
-
