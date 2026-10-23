@@ -9,21 +9,40 @@ st.set_page_config(page_title="Glow Crypto Dashboard", layout="wide")
 if 'portfolio' not in st.session_state:
     st.session_state.portfolio = []
 
-exchange = ccxt.okx()
-symbols = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT']
+# ربط منصة OKX وجلب أسعار الفيوترز (Perpetual)
+exchange = ccxt.okx({
+    'options': {'defaultType': 'swap'}
+})
+# إضافة :USDT لسحب عقود الفيوترز
+symbols = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'BNB/USDT:USDT', 'SOL/USDT:USDT']
 
-st.title("🌟 Glow Crypto Dashboard (Pro Version)")
+st.title("🌟 Glow Crypto Dashboard (Futures & Auto-SL)")
 
-# زرار التحديث بقى مستقل
+# زرار التحديث
 if st.button("🔄 تحديث الأسعار الآن"):
-    pass # ستريمليت بيعمل ريفرش تلقائي مع أي ضغطة زرار
+    pass 
 
 def add_trade(symbol, entry_price, trade_type, direction):
+    # إعدادات الهدف الأول والاستوب لوس (مضبوطة على 1% كمثال)
+    tp1_pct = 0.01 
+    sl_pct = 0.01
+    
+    # حساب الأرقام بناءً على الشراء أو البيع
+    if "BUY" in direction:
+        tp1 = entry_price * (1 + tp1_pct)
+        sl = entry_price * (1 - sl_pct)
+    else: # SELL
+        tp1 = entry_price * (1 - tp1_pct)
+        sl = entry_price * (1 + sl_pct)
+        
     st.session_state.portfolio.append({
         'symbol': symbol,
         'entry_price': entry_price,
         'type': trade_type,
-        'direction': direction
+        'direction': direction,
+        'tp1': tp1,
+        'sl': sl,
+        'sl_moved': False # مؤشر بيعرفنا هل الاستوب اتنقل ولا لسه
     })
 
 def close_trade(index):
@@ -78,9 +97,9 @@ with col1:
 with col2:
     st.header("🗜️ Squeeze")
 with col3:
-    st.header("💼 المحفظة (النشطة)")
+    st.header("💼 المحفظة الذكية (الفيوترز)")
 
-# عرض البيانات بره لوب الزراير عشان زراير الإضافة تشتغل صح
+# عرض الإشارات وزراير الإضافة
 for sym in symbols:
     price, sqz_signal, brk_signal = analyze_crypto(sym)
     
@@ -88,50 +107,69 @@ for sym in symbols:
         continue
         
     with col1:
-        st.markdown(f"**{sym}** - {price}$")
+        st.markdown(f"**{sym.replace(':USDT','')}** - {price}$")
         st.write(f"الإشارة: {brk_signal}")
         if "BUY" in brk_signal or "SELL" in brk_signal:
-            if st.button(f"أضف {sym} 💥", key=f"brk_{sym}"):
+            if st.button(f"أضف للمحفظة 💥", key=f"brk_{sym}"):
                 add_trade(sym, price, "Breakout/SMC", brk_signal)
                 st.rerun()
         st.write("---")
 
     with col2:
-        st.markdown(f"**{sym}** - {price}$")
+        st.markdown(f"**{sym.replace(':USDT','')}** - {price}$")
         st.write(f"الإشارة: {sqz_signal}")
         if "BUY" in sqz_signal or "SELL" in sqz_signal:
-            if st.button(f"أضف {sym} 🗜️", key=f"sqz_{sym}"):
+            if st.button(f"أضف للمحفظة 🗜️", key=f"sqz_{sym}"):
                 add_trade(sym, price, "Squeeze", sqz_signal)
                 st.rerun()
         st.write("---")
 
+# عرض المحفظة وإدارة الصفقات
 with col3:
     if len(st.session_state.portfolio) == 0:
-        st.info("لا توجد صفقات مفتوحة. اضغط 'أضف' عند ظهور إشارة.")
+        st.info("لا توجد صفقات مفتوحة حالياً.")
     else:
         for i, trade in enumerate(st.session_state.portfolio):
-            st.markdown(f"#### {trade['symbol']}")
-            st.write(f"**النوع:** {trade['type']} | **الإشارة:** {trade['direction']}")
+            st.markdown(f"#### {trade['symbol'].replace(':USDT','')}")
+            st.write(f"**الإشارة:** {trade['direction']} ({trade['type']})")
             st.write(f"**سعر الدخول:** {trade['entry_price']}$")
             
             try:
                 ticker = exchange.fetch_ticker(trade['symbol'])
                 current_price = ticker['last']
                 
+                # --- نظام تأمين الصفقة (نقل الاستوب لسعر الدخول) ---
+                if not trade['sl_moved']:
+                    if "BUY" in trade['direction'] and current_price >= trade['tp1']:
+                        st.session_state.portfolio[i]['sl'] = trade['entry_price']
+                        st.session_state.portfolio[i]['sl_moved'] = True
+                    elif "SELL" in trade['direction'] and current_price <= trade['tp1']:
+                        st.session_state.portfolio[i]['sl'] = trade['entry_price']
+                        st.session_state.portfolio[i]['sl_moved'] = True
+                
+                # حساب نسبة الربح/الخسارة
                 if "BUY" in trade['direction']:
                     pnl = ((current_price - trade['entry_price']) / trade['entry_price']) * 100
                 else: 
                     pnl = ((trade['entry_price'] - current_price) / trade['entry_price']) * 100
                     
                 pnl_color = "green" if pnl > 0 else "red"
+                
                 st.markdown(f"**السعر الحالي:** {current_price}$")
                 st.markdown(f"**الربح/الخسارة:** <span style='color:{pnl_color}; font-size:18px;'><b>{pnl:.2f}%</b></span>", unsafe_allow_html=True)
+                
+                # عرض الأهداف والاستوب لوس
+                st.write(f"🎯 **Target 1:** {trade['tp1']:.2f}$")
+                
+                if trade['sl_moved']:
+                    st.success(f"✅ تم تأمين الصفقة! (SL = Entry: {trade['sl']:.2f}$)")
+                else:
+                    st.warning(f"🛑 **Stop Loss:** {trade['sl']:.2f}$")
+                    
             except:
                 st.write("جاري تحديث السعر...")
                 
-            if st.button("❌ إغلاق", key=f"close_{i}"):
+            if st.button("❌ إغلاق الصفقة", key=f"close_{i}"):
                 close_trade(i)
                 st.rerun()
             st.write("---")
-
-
