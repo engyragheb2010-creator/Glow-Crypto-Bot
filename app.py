@@ -2,18 +2,37 @@ import streamlit as st
 import ccxt
 import pandas as pd
 import pandas_ta as ta
+import json
+import os
 
 st.set_page_config(page_title="Glow Crypto Dashboard", layout="wide")
 
+FILE_NAME = "portfolio.json"
+
+# دالة لقراءة الصفقات من الملف (عشان لو السيرفر عمل ريفرش ترجع تاني)
+def load_portfolio():
+    if os.path.exists(FILE_NAME):
+        try:
+            with open(FILE_NAME, "r") as f:
+                return json.load(f)
+        except:
+            return []
+    return []
+
+# دالة لحفظ الصفقات في الملف
+def save_portfolio(portfolio):
+    with open(FILE_NAME, "w") as f:
+        json.dump(portfolio, f)
+
 if 'portfolio' not in st.session_state:
-    st.session_state.portfolio = []
+    st.session_state.portfolio = load_portfolio()
 
 exchange = ccxt.okx({
     'options': {'defaultType': 'swap'}
 })
 symbols = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'BNB/USDT:USDT', 'SOL/USDT:USDT']
 
-st.title("🌟 Glow Crypto Dashboard (Futures & Auto-SL)")
+st.title("🌟 Glow Crypto Dashboard")
 
 if st.button("🔄 Update Prices Now"):
     pass 
@@ -42,9 +61,11 @@ def add_trade(symbol, entry_price, trade_type, direction):
         'sl': sl,
         'sl_moved': False 
     })
+    save_portfolio(st.session_state.portfolio) # حفظ في الملف فوراً
 
 def close_trade(index):
     st.session_state.portfolio.pop(index)
+    save_portfolio(st.session_state.portfolio) # تحديث الملف بعد الحذف
 
 def analyze_crypto(symbol):
     try:
@@ -133,9 +154,11 @@ with col3:
                     if "BUY" in trade['direction'] and current_price >= trade['tp1']:
                         st.session_state.portfolio[i]['sl'] = trade['entry_price']
                         st.session_state.portfolio[i]['sl_moved'] = True
+                        save_portfolio(st.session_state.portfolio)
                     elif "SELL" in trade['direction'] and current_price <= trade['tp1']:
                         st.session_state.portfolio[i]['sl'] = trade['entry_price']
                         st.session_state.portfolio[i]['sl_moved'] = True
+                        save_portfolio(st.session_state.portfolio)
                 
                 if "BUY" in trade['direction']:
                     pnl = ((current_price - trade['entry_price']) / trade['entry_price']) * 100
