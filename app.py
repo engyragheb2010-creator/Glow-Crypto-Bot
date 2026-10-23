@@ -5,12 +5,10 @@ import pandas_ta as ta
 
 st.set_page_config(page_title="Glow Crypto Dashboard", layout="wide")
 
-# السحر هنا: استخدام الكاش عشان الصفقات تفضل محفورة في ذاكرة السيرفر
 @st.cache_resource
 def get_portfolio():
     return []
 
-# استدعاء المحفظة من الكاش
 portfolio = get_portfolio()
 
 exchange = ccxt.okx({
@@ -103,22 +101,32 @@ for sym in symbols:
     if price is None:
         continue
         
+    # فحص هل الصفقة متسجلة حالياً في المحفظة
+    is_brk_active = any(t['symbol'] == sym and t['type'] == "Breakout/SMC" for t in portfolio)
+    is_sqz_active = any(t['symbol'] == sym and t['type'] == "Squeeze" for t in portfolio)
+        
     with col1:
         st.markdown(f"**{sym.replace(':USDT','')}** - ${price}")
         st.write(f"Signal: {brk_signal}")
         if "BUY" in brk_signal or "SELL" in brk_signal:
-            if st.button(f"Add to Portfolio 💥", key=f"brk_{sym}"):
-                add_trade(sym, price, "Breakout/SMC", brk_signal)
-                st.rerun()
+            if is_brk_active:
+                st.success("✅ Active in Portfolio")
+            else:
+                if st.button(f"Add to Portfolio 💥", key=f"brk_{sym}"):
+                    add_trade(sym, price, "Breakout/SMC", brk_signal)
+                    st.rerun()
         st.write("---")
 
     with col2:
         st.markdown(f"**{sym.replace(':USDT','')}** - ${price}")
         st.write(f"Signal: {sqz_signal}")
         if "BUY" in sqz_signal or "SELL" in sqz_signal:
-            if st.button(f"Add to Portfolio 🗜️", key=f"sqz_{sym}"):
-                add_trade(sym, price, "Squeeze", sqz_signal)
-                st.rerun()
+            if is_sqz_active:
+                st.success("✅ Active in Portfolio")
+            else:
+                if st.button(f"Add to Portfolio 🗜️", key=f"sqz_{sym}"):
+                    add_trade(sym, price, "Squeeze", sqz_signal)
+                    st.rerun()
         st.write("---")
 
 with col3:
