@@ -5,9 +5,9 @@ import pandas_ta as ta
 
 # 1. إعدادات الاتصال بالمنصة (OKX Testnet/Live)
 exchange = ccxt.okx({
-    'apiKey': 'YOUR_API_KEY',
-    'secret': 'YOUR_SECRET_KEY',
-    'password': 'YOUR_PASSWORD',
+    'apiKey': "41e8e6d1-3d2d-4861-b0df-61ccdb79e34b"
+    'secret': "1FC2FDF62E1F188458144B7700759BC3" 
+    'password':  "Ahmedengy2010@"
     'enableRateLimit': True,
 })
 
