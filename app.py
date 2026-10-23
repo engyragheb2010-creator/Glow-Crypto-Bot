@@ -23,16 +23,19 @@ if st.button("🔄 تحديث الأسعار الآن"):
     pass 
 
 def add_trade(symbol, entry_price, trade_type, direction):
-    # إعدادات الهدف الأول والاستوب لوس (مضبوطة على 1% كمثال)
-    tp1_pct = 0.01 
-    sl_pct = 0.01
+    # إعدادات الأهداف والاستوب لوس
+    tp1_pct = 0.01  # 1% للهدف الأول
+    tp2_pct = 0.02  # 2% للهدف الثاني
+    sl_pct = 0.01   # 1% للاستوب لوس
     
     # حساب الأرقام بناءً على الشراء أو البيع
     if "BUY" in direction:
         tp1 = entry_price * (1 + tp1_pct)
+        tp2 = entry_price * (1 + tp2_pct)
         sl = entry_price * (1 - sl_pct)
     else: # SELL
         tp1 = entry_price * (1 - tp1_pct)
+        tp2 = entry_price * (1 - tp2_pct)
         sl = entry_price * (1 + sl_pct)
         
     st.session_state.portfolio.append({
@@ -41,6 +44,7 @@ def add_trade(symbol, entry_price, trade_type, direction):
         'type': trade_type,
         'direction': direction,
         'tp1': tp1,
+        'tp2': tp2,
         'sl': sl,
         'sl_moved': False # مؤشر بيعرفنا هل الاستوب اتنقل ولا لسه
     })
@@ -160,6 +164,7 @@ with col3:
                 
                 # عرض الأهداف والاستوب لوس
                 st.write(f"🎯 **Target 1:** {trade['tp1']:.2f}$")
+                st.write(f"🚀 **Target 2:** {trade['tp2']:.2f}$")
                 
                 if trade['sl_moved']:
                     st.success(f"✅ تم تأمين الصفقة! (SL = Entry: {trade['sl']:.2f}$)")
