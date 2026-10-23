@@ -2,11 +2,10 @@ import streamlit as st
 import ccxt
 import pandas as pd
 import pandas_ta as ta
-import time
 
 st.set_page_config(page_title="Glow Crypto Dashboard", layout="wide")
 
-# تهيئة ذاكرة المحفظة (عشان الصفقات ماتتمسحش لما نعمل ريفرش)
+# تهيئة ذاكرة المحفظة
 if 'portfolio' not in st.session_state:
     st.session_state.portfolio = []
 
@@ -15,7 +14,10 @@ symbols = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT']
 
 st.title("🌟 Glow Crypto Dashboard (Pro Version)")
 
-# دوال المحفظة
+# زرار التحديث بقى مستقل
+if st.button("🔄 تحديث الأسعار الآن"):
+    pass # ستريمليت بيعمل ريفرش تلقائي مع أي ضغطة زرار
+
 def add_trade(symbol, entry_price, trade_type, direction):
     st.session_state.portfolio.append({
         'symbol': symbol,
@@ -49,19 +51,17 @@ def analyze_crypto(symbol):
         df_5m['sqz_off'] = (df_5m['bb_lower'] < df_5m['kc_lower']) & (df_5m['bb_upper'] > df_5m['kc_upper'])
         df_5m['sqz_fired'] = df_5m['sqz_on'].shift(1) & df_5m['sqz_off']
         
-        # مؤشر SMC FVG (Breakout)
+        # مؤشر SMC FVG 
         df_5m['fvg_bull'] = (df_5m['low'] > df_5m['high'].shift(2)) & (df_5m['close'].shift(1) > df_5m['open'].shift(1))
         df_5m['fvg_bear'] = (df_5m['high'] < df_5m['low'].shift(2)) & (df_5m['close'].shift(1) < df_5m['open'].shift(1))
         
         price = df_5m.iloc[-1]['close']
         last_5m = df_5m.iloc[-1]
         
-        # إشارات Squeeze
         sqz_signal = "⏳ WAIT"
         if trend_up and last_5m['sqz_fired']: sqz_signal = "🟢 BUY"
         elif trend_down and last_5m['sqz_fired']: sqz_signal = "🔴 SELL"
             
-        # إشارات Breakout/SMC
         brk_signal = "⏳ WAIT"
         if trend_up and last_5m['fvg_bull']: brk_signal = "🟢 BUY"
         elif trend_down and last_5m['fvg_bear']: brk_signal = "🔴 SELL"
@@ -70,7 +70,7 @@ def analyze_crypto(symbol):
     except Exception as e:
         return None, "Error", "Error"
 
-# تقسيم الشاشة 3 خانات
+# تقسيم الشاشة
 col1, col2, col3 = st.columns(3)
 
 with col1:
@@ -78,54 +78,49 @@ with col1:
 with col2:
     st.header("🗜️ Squeeze")
 with col3:
-    st.header("💼 المحفظة (المتابعة)")
+    st.header("💼 المحفظة (النشطة)")
 
-# زر تحديث السوق
-if st.button("🔄 فحص السوق الآن"):
-    for sym in symbols:
-        price, sqz_signal, brk_signal = analyze_crypto(sym)
+# عرض البيانات بره لوب الزراير عشان زراير الإضافة تشتغل صح
+for sym in symbols:
+    price, sqz_signal, brk_signal = analyze_crypto(sym)
+    
+    if price is None:
+        continue
         
-        if price is None:
-            continue
-            
-        # 1. خانة Breakout
-        with col1:
-            st.markdown(f"**{sym}** - {price}$")
-            st.write(f"الإشارة: {brk_signal}")
-            if "BUY" in brk_signal or "SELL" in brk_signal:
-                if st.button(f"أضف {sym} للمحفظة", key=f"add_brk_{sym}"):
-                    add_trade(sym, price, "Breakout", brk_signal)
-                    st.rerun()
-            st.write("---")
+    with col1:
+        st.markdown(f"**{sym}** - {price}$")
+        st.write(f"الإشارة: {brk_signal}")
+        if "BUY" in brk_signal or "SELL" in brk_signal:
+            if st.button(f"أضف {sym} 💥", key=f"brk_{sym}"):
+                add_trade(sym, price, "Breakout/SMC", brk_signal)
+                st.rerun()
+        st.write("---")
 
-        # 2. خانة Squeeze
-        with col2:
-            st.markdown(f"**{sym}** - {price}$")
-            st.write(f"الإشارة: {sqz_signal}")
-            if "BUY" in sqz_signal or "SELL" in sqz_signal:
-                if st.button(f"أضف {sym} للمحفظة", key=f"add_sqz_{sym}"):
-                    add_trade(sym, price, "Squeeze", sqz_signal)
-                    st.rerun()
-            st.write("---")
+    with col2:
+        st.markdown(f"**{sym}** - {price}$")
+        st.write(f"الإشارة: {sqz_signal}")
+        if "BUY" in sqz_signal or "SELL" in sqz_signal:
+            if st.button(f"أضف {sym} 🗜️", key=f"sqz_{sym}"):
+                add_trade(sym, price, "Squeeze", sqz_signal)
+                st.rerun()
+        st.write("---")
 
-# 3. خانة المحفظة (بتعرض الصفقات المفتوحة دايماً)
 with col3:
     if len(st.session_state.portfolio) == 0:
-        st.info("لا توجد صفقات مفتوحة. عند ظهور إشارة، اضغط على 'أضف للمحفظة'.")
+        st.info("لا توجد صفقات مفتوحة. اضغط 'أضف' عند ظهور إشارة.")
     else:
         for i, trade in enumerate(st.session_state.portfolio):
-            st.markdown(f"### {trade['symbol']} ({trade['type']})")
-            st.write(f"**الاتجاه:** {trade['direction']} | **سعر الدخول:** {trade['entry_price']}$")
+            st.markdown(f"#### {trade['symbol']}")
+            st.write(f"**النوع:** {trade['type']} | **الإشارة:** {trade['direction']}")
+            st.write(f"**سعر الدخول:** {trade['entry_price']}$")
             
-            # جلب السعر الحالي لحساب الربح
             try:
                 ticker = exchange.fetch_ticker(trade['symbol'])
                 current_price = ticker['last']
                 
-                # حساب نسبة الربح أو الخسارة
                 if "BUY" in trade['direction']:
                     pnl = ((current_price - trade['entry_price']) / trade['entry_price']) * 100
-                else: # SELL
+                else: 
                     pnl = ((trade['entry_price'] - current_price) / trade['entry_price']) * 100
                     
                 pnl_color = "green" if pnl > 0 else "red"
@@ -134,8 +129,9 @@ with col3:
             except:
                 st.write("جاري تحديث السعر...")
                 
-            if st.button("❌ إغلاق الصفقة", key=f"close_{i}"):
+            if st.button("❌ إغلاق", key=f"close_{i}"):
                 close_trade(i)
                 st.rerun()
             st.write("---")
+
 
