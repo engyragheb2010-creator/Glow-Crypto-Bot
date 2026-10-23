@@ -11,13 +11,13 @@ st.title("🐋 لوحة تحكم التداول المؤسسي (4H + 5m)")
 # --- الاتصال الآمن بالمنصة ---
 try:
     exchange = ccxt.okx({
-        'apiKey':"41e8e6d1-3d2d-4861-b0df-61ccdb79e34b"
-        'secret': "1FC2FDF62E1F188458144B7700759BC3" 
-        'password': "Ahmedengy2010@" 
+        'apiKey': "41e8e6d1-3d2d-4861-b0df-61ccdb79e34b",
+        'secret': "1FC2FDF62E1F188458144B7700759BC3", 
+        'password': "Ahmedengy2010@", 
         'enableRateLimit': True,
     })
 except Exception:
-    st.error("⚠️ يرجى وضع مفاتيح الـ API في إعدادات Streamlit (Secrets).")
+    st.error("⚠️ يرجى التأكد من صحة مفاتيح الـ API.")
     st.stop()
 
 # --- إعدادات الاستراتيجية ---
@@ -133,4 +133,3 @@ else:
 st.write(f"🔄 **تحديث تلقائي:** {pd.Timestamp.now().strftime('%H:%M:%S')}")
 time.sleep(POLL_INTERVAL)
 st.rerun()
-
