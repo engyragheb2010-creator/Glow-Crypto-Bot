@@ -11,9 +11,9 @@ st.title("🐋 لوحة تحكم التداول المؤسسي (4H + 5m)")
 # --- الاتصال الآمن بالمنصة ---
 try:
     exchange = ccxt.okx({
-        'apiKey': st.secrets"41e8e6d1-3d2d-4861-b0df-61ccdb79e34b"
-        'secret': st.secrets"1FC2FDF62E1F188458144B7700759BC3" 
-        'password': st.secrets "Ahmedengy2010@" 
+        'apiKey':"41e8e6d1-3d2d-4861-b0df-61ccdb79e34b"
+        'secret': "1FC2FDF62E1F188458144B7700759BC3" 
+        'password': "Ahmedengy2010@" 
         'enableRateLimit': True,
     })
 except Exception:
