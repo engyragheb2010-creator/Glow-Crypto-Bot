@@ -2,57 +2,66 @@ import streamlit as st
 import ccxt
 import pandas as pd
 import pandas_ta as ta
+import time
 
 st.set_page_config(page_title="Glow Crypto Dashboard", layout="wide")
-st.title("🌟 Glow Crypto Dashboard (OKX)")
+st.title("🌟 Glow Crypto Dashboard (Breakout & SMC)")
 
-# ربط منصة OKX
 exchange = ccxt.okx()
 
 def analyze_crypto(symbol):
     try:
-        # جلب البيانات
-        bars = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=200)
-        df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        # 1. جلب بيانات 4 ساعات لتحديد الاتجاه العام (الترند)
+        bars_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=250)
+        df_4h = pd.DataFrame(bars_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df_4h['ema200'] = ta.ema(df_4h['close'], length=200)
         
-        # حساب EMA 200
-        df['ema200'] = ta.ema(df['close'], length=200)
+        last_4h = df_4h.iloc[-1]
+        trend_up = last_4h['close'] > last_4h['ema200']
+        trend_down = last_4h['close'] < last_4h['ema200']
         
-        # حساب Squeeze
-        df[['bb_lower', 'bb_mid', 'bb_upper']] = ta.bbands(df['close'], length=20).iloc[:, :3]
-        kc = ta.kc(df['close'], length=20, scalar=1.5)
-        df['kc_lower'] = kc.iloc[:, 0]
-        df['kc_upper'] = kc.iloc[:, 2]
+        trend_text = "Up ⬆️" if trend_up else "Down ⬇️" if trend_down else "Neutral ↔️"
+
+        # 2. جلب بيانات 5 دقائق لتحديد نقطة الدخول (Breakout & SMC FVG)
+        bars_5m = exchange.fetch_ohlcv(symbol, timeframe='5m', limit=100)
+        df_5m = pd.DataFrame(bars_5m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         
-        df['sqz_on'] = (df['bb_lower'] > df['kc_lower']) & (df['bb_upper'] < df['kc_upper'])
-        df['sqz_off'] = (df['bb_lower'] < df['kc_lower']) & (df['bb_upper'] > df['kc_upper'])
-        df['sqz_fired'] = df['sqz_on'].shift(1) & df['sqz_off']
+        # مؤشر Squeeze (للانفجار السعري / Breakout)
+        df_5m[['bb_lower', 'bb_mid', 'bb_upper']] = ta.bbands(df_5m['close'], length=20).iloc[:, :3]
+        kc = ta.kc(df_5m['close'], length=20, scalar=1.5)
+        df_5m['kc_lower'] = kc.iloc[:, 0]
+        df_5m['kc_upper'] = kc.iloc[:, 2]
         
-        # حساب SMC FVG
-        df['fvg_bull'] = (df['low'] > df['high'].shift(2)) & (df['close'].shift(1) > df['open'].shift(1))
-        df['fvg_bear'] = (df['high'] < df['low'].shift(2)) & (df['close'].shift(1) < df['open'].shift(1))
+        df_5m['sqz_on'] = (df_5m['bb_lower'] > df_5m['kc_lower']) & (df_5m['bb_upper'] < df_5m['kc_upper'])
+        df_5m['sqz_off'] = (df_5m['bb_lower'] < df_5m['kc_lower']) & (df_5m['bb_upper'] > df_5m['kc_upper'])
+        df_5m['sqz_fired'] = df_5m['sqz_on'].shift(1) & df_5m['sqz_off']
         
-        last = df.iloc[-1]
+        # SMC FVG (Fair Value Gap)
+        df_5m['fvg_bull'] = (df_5m['low'] > df_5m['high'].shift(2)) & (df_5m['close'].shift(1) > df_5m['open'].shift(1))
+        df_5m['fvg_bear'] = (df_5m['high'] < df_5m['low'].shift(2)) & (df_5m['close'].shift(1) < df_5m['open'].shift(1))
         
-        # تحديد الاتجاه والإشارات
-        trend = "Up ⬆️" if last['close'] > last['ema200'] else "Down ⬇️"
+        last_5m = df_5m.iloc[-1]
+        current_price = last_5m['close']
         
-        signal = "⏳ WAIT"
+        # تحديد الإشارة
+        signal = "⏳ WAIT (انتظار)"
         signal_color = "gray"
         
-        if last['close'] > last['ema200'] and (last['fvg_bull'] or last['sqz_fired']):
+        # شروط الشراء: ترند صاعد 4 ساعات + (انفجار سعري 5 دقايق أو فجوة شرائية)
+        if trend_up and (last_5m['fvg_bull'] or last_5m['sqz_fired']):
             signal = "🟢 BUY (شراء)"
             signal_color = "green"
-        elif last['close'] < last['ema200'] and (last['fvg_bear'] or last['sqz_fired']):
+            
+        # شروط البيع: ترند هابط 4 ساعات + (انفجار سعري 5 دقايق أو فجوة بيعية)
+        elif trend_down and (last_5m['fvg_bear'] or last_5m['sqz_fired']):
             signal = "🔴 SELL (بيع)"
             signal_color = "red"
             
-        return last['close'], trend, signal, signal_color
+        return current_price, trend_text, signal, signal_color
         
     except Exception as e:
-        return None, None, "Error", "red"
+        return None, None, f"Error: {str(e)}", "red"
 
-# العملات المطلوبة
 symbols = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT']
 
 if st.button("🔄 تحديث بيانات السوق الآن"):
@@ -61,9 +70,14 @@ if st.button("🔄 تحديث بيانات السوق الآن"):
         price, trend, signal, color = analyze_crypto(sym)
         with cols[i]:
             st.subheader(sym)
-            st.write(f"**السعر:** {price}$")
-            st.write(f"**الاتجاه:** {trend}")
-            st.markdown(f"<h3 style='color: {color};'>{signal}</h3>", unsafe_allow_html=True)
+            if price is not None:
+                st.write(f"**السعر:** {price}$")
+                st.write(f"**ترند 4h:** {trend}")
+                st.markdown(f"<h5 style='color: {color};'>{signal}</h5>", unsafe_allow_html=True)
+            else:
+                st.error(signal) # هيعرض سبب المشكلة بالظبط لو حصلت
+        time.sleep(0.2) # تأخير بسيط عشان المنصة متعملش بلوك
 
 st.write("---")
-st.write("البيانات تأتي مباشرة من منصة OKX - الإطار الزمني: 15 دقيقة")
+st.write("الاستراتيجية: الاتجاه من فريم 4 ساعات + الدخول (Breakout & SMC) من فريم 5 دقائق")
+
