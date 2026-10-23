@@ -28,7 +28,9 @@ def analyze_crypto(symbol):
         
         # مؤشر Squeeze (للانفجار السعري / Breakout)
         df_5m[['bb_lower', 'bb_mid', 'bb_upper']] = ta.bbands(df_5m['close'], length=20).iloc[:, :3]
-        kc = ta.kc(df_5m['close'], length=20, scalar=1.5)
+        
+        # السطر اللي تم تصحيحه وإضافة High و Low
+        kc = ta.kc(df_5m['high'], df_5m['low'], df_5m['close'], length=20, scalar=1.5)
         df_5m['kc_lower'] = kc.iloc[:, 0]
         df_5m['kc_upper'] = kc.iloc[:, 2]
         
@@ -75,8 +77,8 @@ if st.button("🔄 تحديث بيانات السوق الآن"):
                 st.write(f"**ترند 4h:** {trend}")
                 st.markdown(f"<h5 style='color: {color};'>{signal}</h5>", unsafe_allow_html=True)
             else:
-                st.error(signal) # هيعرض سبب المشكلة بالظبط لو حصلت
-        time.sleep(0.2) # تأخير بسيط عشان المنصة متعملش بلوك
+                st.error(signal)
+        time.sleep(0.2) 
 
 st.write("---")
 st.write("الاستراتيجية: الاتجاه من فريم 4 ساعات + الدخول (Breakout & SMC) من فريم 5 دقائق")
