@@ -2,30 +2,16 @@ import streamlit as st
 import ccxt
 import pandas as pd
 import pandas_ta as ta
-import json
-import os
 
 st.set_page_config(page_title="Glow Crypto Dashboard", layout="wide")
 
-FILE_NAME = "portfolio.json"
-
-# دالة لقراءة الصفقات من الملف (عشان لو السيرفر عمل ريفرش ترجع تاني)
-def load_portfolio():
-    if os.path.exists(FILE_NAME):
-        try:
-            with open(FILE_NAME, "r") as f:
-                return json.load(f)
-        except:
-            return []
+# السحر هنا: استخدام الكاش عشان الصفقات تفضل محفورة في ذاكرة السيرفر
+@st.cache_resource
+def get_portfolio():
     return []
 
-# دالة لحفظ الصفقات في الملف
-def save_portfolio(portfolio):
-    with open(FILE_NAME, "w") as f:
-        json.dump(portfolio, f)
-
-if 'portfolio' not in st.session_state:
-    st.session_state.portfolio = load_portfolio()
+# استدعاء المحفظة من الكاش
+portfolio = get_portfolio()
 
 exchange = ccxt.okx({
     'options': {'defaultType': 'swap'}
@@ -51,7 +37,7 @@ def add_trade(symbol, entry_price, trade_type, direction):
         tp2 = entry_price * (1 - tp2_pct)
         sl = entry_price * (1 + sl_pct)
         
-    st.session_state.portfolio.append({
+    portfolio.append({
         'symbol': symbol,
         'entry_price': entry_price,
         'type': trade_type,
@@ -61,11 +47,9 @@ def add_trade(symbol, entry_price, trade_type, direction):
         'sl': sl,
         'sl_moved': False 
     })
-    save_portfolio(st.session_state.portfolio) # حفظ في الملف فوراً
 
 def close_trade(index):
-    st.session_state.portfolio.pop(index)
-    save_portfolio(st.session_state.portfolio) # تحديث الملف بعد الحذف
+    portfolio.pop(index)
 
 def analyze_crypto(symbol):
     try:
@@ -138,10 +122,10 @@ for sym in symbols:
         st.write("---")
 
 with col3:
-    if len(st.session_state.portfolio) == 0:
+    if len(portfolio) == 0:
         st.info("No open trades currently.")
     else:
-        for i, trade in enumerate(st.session_state.portfolio):
+        for i, trade in enumerate(portfolio):
             st.markdown(f"#### {trade['symbol'].replace(':USDT','')}")
             st.write(f"**Signal:** {trade['direction']} ({trade['type']})")
             st.write(f"**Entry Price:** ${trade['entry_price']}")
@@ -152,13 +136,11 @@ with col3:
                 
                 if not trade['sl_moved']:
                     if "BUY" in trade['direction'] and current_price >= trade['tp1']:
-                        st.session_state.portfolio[i]['sl'] = trade['entry_price']
-                        st.session_state.portfolio[i]['sl_moved'] = True
-                        save_portfolio(st.session_state.portfolio)
+                        portfolio[i]['sl'] = trade['entry_price']
+                        portfolio[i]['sl_moved'] = True
                     elif "SELL" in trade['direction'] and current_price <= trade['tp1']:
-                        st.session_state.portfolio[i]['sl'] = trade['entry_price']
-                        st.session_state.portfolio[i]['sl_moved'] = True
-                        save_portfolio(st.session_state.portfolio)
+                        portfolio[i]['sl'] = trade['entry_price']
+                        portfolio[i]['sl_moved'] = True
                 
                 if "BUY" in trade['direction']:
                     pnl = ((current_price - trade['entry_price']) / trade['entry_price']) * 100
