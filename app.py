@@ -16,7 +16,7 @@ exchange = ccxt.okx({
 })
 symbols = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'BNB/USDT:USDT', 'SOL/USDT:USDT']
 
-st.title("🌟 Glow Crypto Dashboard")
+st.title("🌟 Glow Crypto Dashboard (Pro Sniper)")
 
 if st.button("🔄 Update Prices Now"):
     pass 
@@ -53,15 +53,39 @@ def close_trade(index):
 
 def analyze_crypto(symbol):
     try:
+        # 1. فريم 4 ساعات
         bars_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=250)
         df_4h = pd.DataFrame(bars_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df_4h['ema200'] = ta.ema(df_4h['close'], length=200)
-        trend_up = df_4h.iloc[-1]['close'] > df_4h.iloc[-1]['ema200']
-        trend_down = df_4h.iloc[-1]['close'] < df_4h.iloc[-1]['ema200']
+        trend_4h_up = df_4h.iloc[-1]['close'] > df_4h.iloc[-1]['ema200']
+        trend_4h_down = df_4h.iloc[-1]['close'] < df_4h.iloc[-1]['ema200']
 
+        # 2. فريم 1 ساعة
+        bars_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=250)
+        df_1h = pd.DataFrame(bars_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df_1h['ema200'] = ta.ema(df_1h['close'], length=200)
+        trend_1h_up = df_1h.iloc[-1]['close'] > df_1h.iloc[-1]['ema200']
+        trend_1h_down = df_1h.iloc[-1]['close'] < df_1h.iloc[-1]['ema200']
+
+        # 3. فريم 15 دقيقة
+        bars_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=250)
+        df_15m = pd.DataFrame(bars_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df_15m['ema200'] = ta.ema(df_15m['close'], length=200)
+        trend_15m_up = df_15m.iloc[-1]['close'] > df_15m.iloc[-1]['ema200']
+        trend_15m_down = df_15m.iloc[-1]['close'] < df_15m.iloc[-1]['ema200']
+
+        # --- الفلتر الصارم: الاتجاه الموحد ---
+        trend_up_all = trend_4h_up and trend_1h_up and trend_15m_up
+        trend_down_all = trend_4h_down and trend_1h_down and trend_15m_down
+
+        # 4. فريم 5 دقايق (نقطة الدخول والسيولة)
         bars_5m = exchange.fetch_ohlcv(symbol, timeframe='5m', limit=100)
         df_5m = pd.DataFrame(bars_5m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         
+        # --- فلتر السيولة (Volume) ---
+        df_5m['vol_sma'] = ta.sma(df_5m['volume'], length=20)
+        
+        # Squeeze Strategy
         df_5m[['bb_lower', 'bb_mid', 'bb_upper']] = ta.bbands(df_5m['close'], length=20).iloc[:, :3]
         kc = ta.kc(df_5m['high'], df_5m['low'], df_5m['close'], length=20, scalar=1.5)
         df_5m['kc_lower'] = kc.iloc[:, 0]
@@ -70,19 +94,23 @@ def analyze_crypto(symbol):
         df_5m['sqz_off'] = (df_5m['bb_lower'] < df_5m['kc_lower']) & (df_5m['bb_upper'] > df_5m['kc_upper'])
         df_5m['sqz_fired'] = df_5m['sqz_on'].shift(1) & df_5m['sqz_off']
         
+        # Breakout/SMC Strategy
         df_5m['fvg_bull'] = (df_5m['low'] > df_5m['high'].shift(2)) & (df_5m['close'].shift(1) > df_5m['open'].shift(1))
         df_5m['fvg_bear'] = (df_5m['high'] < df_5m['low'].shift(2)) & (df_5m['close'].shift(1) < df_5m['open'].shift(1))
         
         price = df_5m.iloc[-1]['close']
         last_5m = df_5m.iloc[-1]
         
+        # التأكد من إن السيولة الحالية أعلى من المتوسط
+        high_volume = last_5m['volume'] > last_5m['vol_sma']
+        
         sqz_signal = "⏳ WAIT"
-        if trend_up and last_5m['sqz_fired']: sqz_signal = "🟢 BUY"
-        elif trend_down and last_5m['sqz_fired']: sqz_signal = "🔴 SELL"
+        if trend_up_all and last_5m['sqz_fired'] and high_volume: sqz_signal = "🟢 BUY"
+        elif trend_down_all and last_5m['sqz_fired'] and high_volume: sqz_signal = "🔴 SELL"
             
         brk_signal = "⏳ WAIT"
-        if trend_up and last_5m['fvg_bull']: brk_signal = "🟢 BUY"
-        elif trend_down and last_5m['fvg_bear']: brk_signal = "🔴 SELL"
+        if trend_up_all and last_5m['fvg_bull'] and high_volume: brk_signal = "🟢 BUY"
+        elif trend_down_all and last_5m['fvg_bear'] and high_volume: brk_signal = "🔴 SELL"
             
         return price, sqz_signal, brk_signal
     except Exception as e:
@@ -179,7 +207,6 @@ with col3:
             
             pnl_color = "green" if pnl > 0 else "red"
             
-            # تحديد العنوان الخارجي للكارت
             if trade['status'] == 'hit_tp2':
                 title_status = "🎉 Won"
             elif trade['status'] == 'hit_sl':
@@ -189,7 +216,6 @@ with col3:
                 
             expander_title = f"{trade['symbol'].replace(':USDT','')} | {trade['direction'][:4].strip()} | {title_status}"
             
-            # تصميم الكارت القابل للطي (يظهر مقفول لتقليل السكرول)
             with st.expander(expander_title, expanded=False):
                 st.write(f"**Strategy:** {trade['type']}")
                 st.write(f"**Entry Price:** ${trade['entry_price']}")
