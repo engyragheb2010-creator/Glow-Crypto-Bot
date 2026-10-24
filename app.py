@@ -1,4 +1,4 @@
- import streamlit as st
+import streamlit as st
 import ccxt
 import pandas as pd
 import pandas_ta as ta
