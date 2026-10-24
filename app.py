@@ -16,12 +16,25 @@ exchange = ccxt.okx({
 })
 symbols = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'BNB/USDT:USDT', 'SOL/USDT:USDT']
 
-st.title("🌟 Glow Crypto Dashboard (Pro Sniper)")
+# --- القائمة الجانبية (Sidebar) ---
+st.sidebar.title("⚙️ Bot Settings")
+st.sidebar.write("Choose the strictness level:")
+trading_mode = st.sidebar.radio(
+    "Trading Mode", 
+    ["🎯 Pro Sniper (Safest)", "🔥 Action Mode (Faster)"]
+)
+st.sidebar.write("---")
+if "Pro" in trading_mode:
+    st.sidebar.info("**Pro Sniper:** Requires 4H, 1H, and 15m trends to match perfectly + High Volume.")
+else:
+    st.sidebar.warning("**Action Mode:** Relies only on the 15m trend for faster entries. Higher risk of fakeouts.")
+
+st.title(f"🌟 Glow Crypto Dashboard - {trading_mode[:2]}")
 
 if st.button("🔄 Update Prices Now"):
     pass 
 
-def add_trade(symbol, entry_price, trade_type, direction):
+def add_trade(symbol, entry_price, trade_type, direction, mode):
     tp1_pct = 0.01  
     tp2_pct = 0.02  
     sl_pct = 0.01   
@@ -40,6 +53,7 @@ def add_trade(symbol, entry_price, trade_type, direction):
         'entry_price': entry_price,
         'type': trade_type,
         'direction': direction,
+        'mode': mode,
         'tp1': tp1,
         'tp2': tp2,
         'sl': sl,
@@ -51,41 +65,51 @@ def add_trade(symbol, entry_price, trade_type, direction):
 def close_trade(index):
     portfolio.pop(index)
 
-def analyze_crypto(symbol):
+def analyze_crypto(symbol, current_mode):
     try:
-        # 1. فريم 4 ساعات
+        # 1. 4H Trend
         bars_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=250)
         df_4h = pd.DataFrame(bars_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df_4h['ema200'] = ta.ema(df_4h['close'], length=200)
         trend_4h_up = df_4h.iloc[-1]['close'] > df_4h.iloc[-1]['ema200']
-        trend_4h_down = df_4h.iloc[-1]['close'] < df_4h.iloc[-1]['ema200']
-
-        # 2. فريم 1 ساعة
+        
+        # 2. 1H Trend
         bars_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=250)
         df_1h = pd.DataFrame(bars_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df_1h['ema200'] = ta.ema(df_1h['close'], length=200)
         trend_1h_up = df_1h.iloc[-1]['close'] > df_1h.iloc[-1]['ema200']
-        trend_1h_down = df_1h.iloc[-1]['close'] < df_1h.iloc[-1]['ema200']
-
-        # 3. فريم 15 دقيقة
+        
+        # 3. 15m Trend
         bars_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=250)
         df_15m = pd.DataFrame(bars_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df_15m['ema200'] = ta.ema(df_15m['close'], length=200)
         trend_15m_up = df_15m.iloc[-1]['close'] > df_15m.iloc[-1]['ema200']
-        trend_15m_down = df_15m.iloc[-1]['close'] < df_15m.iloc[-1]['ema200']
 
-        # --- الفلتر الصارم: الاتجاه الموحد ---
-        trend_up_all = trend_4h_up and trend_1h_up and trend_15m_up
-        trend_down_all = trend_4h_down and trend_1h_down and trend_15m_down
-
-        # 4. فريم 5 دقايق (نقطة الدخول والسيولة)
+        # 4. 5m Entry & Volume
         bars_5m = exchange.fetch_ohlcv(symbol, timeframe='5m', limit=100)
         df_5m = pd.DataFrame(bars_5m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        
-        # --- فلتر السيولة (Volume) ---
         df_5m['vol_sma'] = ta.sma(df_5m['volume'], length=20)
         
-        # Squeeze Strategy
+        last_5m = df_5m.iloc[-1]
+        high_volume = last_5m['volume'] > last_5m['vol_sma']
+
+        # --- تحديد شروط الاتجاه حسب النظام المختار ---
+        if "Pro" in current_mode:
+            trend_up = trend_4h_up and trend_1h_up and trend_15m_up
+            trend_down = (not trend_4h_up) and (not trend_1h_up) and (not trend_15m_up)
+        else:
+            # Action Mode: يعتمد على فريم 15 دقيقة بس عشان يكون أسرع
+            trend_up = trend_15m_up
+            trend_down = not trend_15m_up
+
+        # Debug String (شاشة الأشعة)
+        d_4h = "🟢" if trend_4h_up else "🔴"
+        d_1h = "🟢" if trend_1h_up else "🔴"
+        d_15m = "🟢" if trend_15m_up else "🔴"
+        d_vol = "🔥" if high_volume else "❄️"
+        debug_info = f"4H:{d_4h} | 1H:{d_1h} | 15m:{d_15m} | Vol:{d_vol}"
+
+        # Squeeze Logic
         df_5m[['bb_lower', 'bb_mid', 'bb_upper']] = ta.bbands(df_5m['close'], length=20).iloc[:, :3]
         kc = ta.kc(df_5m['high'], df_5m['low'], df_5m['close'], length=20, scalar=1.5)
         df_5m['kc_lower'] = kc.iloc[:, 0]
@@ -94,39 +118,35 @@ def analyze_crypto(symbol):
         df_5m['sqz_off'] = (df_5m['bb_lower'] < df_5m['kc_lower']) & (df_5m['bb_upper'] > df_5m['kc_upper'])
         df_5m['sqz_fired'] = df_5m['sqz_on'].shift(1) & df_5m['sqz_off']
         
-        # Breakout/SMC Strategy
+        # Breakout/SMC Logic
         df_5m['fvg_bull'] = (df_5m['low'] > df_5m['high'].shift(2)) & (df_5m['close'].shift(1) > df_5m['open'].shift(1))
         df_5m['fvg_bear'] = (df_5m['high'] < df_5m['low'].shift(2)) & (df_5m['close'].shift(1) < df_5m['open'].shift(1))
         
         price = df_5m.iloc[-1]['close']
-        last_5m = df_5m.iloc[-1]
-        
-        # التأكد من إن السيولة الحالية أعلى من المتوسط
-        high_volume = last_5m['volume'] > last_5m['vol_sma']
         
         sqz_signal = "⏳ WAIT"
-        if trend_up_all and last_5m['sqz_fired'] and high_volume: sqz_signal = "🟢 BUY"
-        elif trend_down_all and last_5m['sqz_fired'] and high_volume: sqz_signal = "🔴 SELL"
+        if trend_up and last_5m['sqz_fired'] and high_volume: sqz_signal = "🟢 BUY"
+        elif trend_down and last_5m['sqz_fired'] and high_volume: sqz_signal = "🔴 SELL"
             
         brk_signal = "⏳ WAIT"
-        if trend_up_all and last_5m['fvg_bull'] and high_volume: brk_signal = "🟢 BUY"
-        elif trend_down_all and last_5m['fvg_bear'] and high_volume: brk_signal = "🔴 SELL"
+        if trend_up and last_5m['fvg_bull'] and high_volume: brk_signal = "🟢 BUY"
+        elif trend_down and last_5m['fvg_bear'] and high_volume: brk_signal = "🔴 SELL"
             
-        return price, sqz_signal, brk_signal
+        return price, sqz_signal, brk_signal, debug_info
     except Exception as e:
-        return None, "Error", "Error"
+        return None, "Error", "Error", "Error"
 
-col1, col2, col3 = st.columns(3)
+col1, col2, col3 = st.columns([1, 1, 1.2])
 
 with col1:
-    st.header("💥 Breakout & SMC")
+    st.header("💥 Breakout/SMC")
 with col2:
     st.header("🗜️ Squeeze")
 with col3:
     st.header("💼 Smart Portfolio")
 
 for sym in symbols:
-    price, sqz_signal, brk_signal = analyze_crypto(sym)
+    price, sqz_signal, brk_signal, debug_info = analyze_crypto(sym, trading_mode)
     
     if price is None:
         continue
@@ -136,25 +156,29 @@ for sym in symbols:
         
     with col1:
         st.markdown(f"**{sym.replace(':USDT','')}** - ${price}")
+        st.caption(f"`{debug_info}`") # شاشة الأشعة
         st.write(f"Signal: {brk_signal}")
         if "BUY" in brk_signal or "SELL" in brk_signal:
             if is_brk_active:
                 st.caption("🔒 Already Running")
             else:
-                if st.button(f"Add to Portfolio 💥", key=f"brk_{sym}"):
-                    add_trade(sym, price, "Breakout/SMC", brk_signal)
+                if st.button(f"Add 💥", key=f"brk_{sym}"):
+                    mode_label = "🎯 Pro" if "Pro" in trading_mode else "🔥 Action"
+                    add_trade(sym, price, "Breakout/SMC", brk_signal, mode_label)
                     st.rerun()
         st.write("---")
 
     with col2:
         st.markdown(f"**{sym.replace(':USDT','')}** - ${price}")
+        st.caption(f"`{debug_info}`") # شاشة الأشعة
         st.write(f"Signal: {sqz_signal}")
         if "BUY" in sqz_signal or "SELL" in sqz_signal:
             if is_sqz_active:
                 st.caption("🔒 Already Running")
             else:
-                if st.button(f"Add to Portfolio 🗜️", key=f"sqz_{sym}"):
-                    add_trade(sym, price, "Squeeze", sqz_signal)
+                if st.button(f"Add 🗜️", key=f"sqz_{sym}"):
+                    mode_label = "🎯 Pro" if "Pro" in trading_mode else "🔥 Action"
+                    add_trade(sym, price, "Squeeze", sqz_signal, mode_label)
                     st.rerun()
         st.write("---")
 
@@ -214,10 +238,14 @@ with col3:
             else:
                 title_status = f"{pnl:.2f}%"
                 
-            expander_title = f"{trade['symbol'].replace(':USDT','')} | {trade['direction'][:4].strip()} | {title_status}"
+            # التعديل هنا: عنوان الكارت بيعرض المود واسم الاستراتيجية
+            strat_icon = "💥" if "Breakout" in trade['type'] else "🗜️"
+            expander_title = f"{trade['symbol'].replace(':USDT','')} | {trade['mode']} | {strat_icon} | {title_status}"
             
             with st.expander(expander_title, expanded=False):
+                st.write(f"**Mode:** {trade['mode']}")
                 st.write(f"**Strategy:** {trade['type']}")
+                st.write(f"**Direction:** {trade['direction']}")
                 st.write(f"**Entry Price:** ${trade['entry_price']}")
                 
                 if trade['status'] == 'active':
@@ -242,6 +270,6 @@ with col3:
                     else:
                         st.warning(f"🛑 **Stop Loss:** ${trade['sl']:.2f}")
                     
-                if st.button("❌ Remove from Portfolio", key=f"close_{i}"):
+                if st.button("❌ Remove Trade", key=f"close_{i}"):
                     close_trade(i)
                     st.rerun()
