@@ -1,4 +1,4 @@
-import streamlit as st
+ import streamlit as st
 import ccxt
 import pandas as pd
 import pandas_ta as ta
@@ -14,7 +14,7 @@ portfolio = get_portfolio()
 
 exchange = ccxt.okx({
     'options': {'defaultType': 'swap'},
-    'enableRateLimit': True # حماية إضافية من المنصة
+    'enableRateLimit': True 
 })
 symbols = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'BNB/USDT:USDT', 'SOL/USDT:USDT']
 
@@ -74,7 +74,7 @@ def analyze_crypto(symbol, current_mode):
         df_4h = pd.DataFrame(bars_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df_4h['ema200'] = ta.ema(df_4h['close'], length=200)
         trend_4h_up = df_4h.iloc[-1]['close'] > df_4h.iloc[-1]['ema200']
-        time.sleep(0.1) # استراحة صغيرة لمنع البلوك
+        time.sleep(0.1) 
         
         # 2. 1H Trend
         bars_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=250)
@@ -95,9 +95,6 @@ def analyze_crypto(symbol, current_mode):
         df_5m = pd.DataFrame(bars_5m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df_5m['vol_sma'] = ta.sma(df_5m['volume'], length=20)
         
-        last_5m = df_5m.iloc[-1]
-        high_volume = last_5m['volume'] > last_5m['vol_sma']
-
         # --- تحديد شروط الاتجاه ---
         if "Pro" in current_mode:
             trend_up = trend_4h_up and trend_1h_up and trend_15m_up
@@ -105,13 +102,6 @@ def analyze_crypto(symbol, current_mode):
         else:
             trend_up = trend_15m_up
             trend_down = not trend_15m_up
-
-        # Debug String 
-        d_4h = "🟢" if trend_4h_up else "🔴"
-        d_1h = "🟢" if trend_1h_up else "🔴"
-        d_15m = "🟢" if trend_15m_up else "🔴"
-        d_vol = "🔥" if high_volume else "❄️"
-        debug_info = f"4H:{d_4h} | 1H:{d_1h} | 15m:{d_15m} | Vol:{d_vol}"
 
         # Squeeze Logic
         df_5m[['bb_lower', 'bb_mid', 'bb_upper']] = ta.bbands(df_5m['close'], length=20).iloc[:, :3]
@@ -126,8 +116,18 @@ def analyze_crypto(symbol, current_mode):
         df_5m['fvg_bull'] = (df_5m['low'] > df_5m['high'].shift(2)) & (df_5m['close'].shift(1) > df_5m['open'].shift(1))
         df_5m['fvg_bear'] = (df_5m['high'] < df_5m['low'].shift(2)) & (df_5m['close'].shift(1) < df_5m['open'].shift(1))
         
-        price = df_5m.iloc[-1]['close']
-        
+        # أخذ اللقطة بعد ما كل المؤشرات اتحسبت
+        last_5m = df_5m.iloc[-1]
+        price = last_5m['close']
+        high_volume = last_5m['volume'] > last_5m['vol_sma']
+
+        # Debug String 
+        d_4h = "🟢" if trend_4h_up else "🔴"
+        d_1h = "🟢" if trend_1h_up else "🔴"
+        d_15m = "🟢" if trend_15m_up else "🔴"
+        d_vol = "🔥" if high_volume else "❄️"
+        debug_info = f"4H:{d_4h} | 1H:{d_1h} | 15m:{d_15m} | Vol:{d_vol}"
+
         sqz_signal = "⏳ WAIT"
         if trend_up and last_5m['sqz_fired'] and high_volume: sqz_signal = "🟢 BUY"
         elif trend_down and last_5m['sqz_fired'] and high_volume: sqz_signal = "🔴 SELL"
@@ -138,7 +138,6 @@ def analyze_crypto(symbol, current_mode):
             
         return price, sqz_signal, brk_signal, debug_info
     except Exception as e:
-        # هنا البوت هيكتبلك سبب المشكلة على الشاشة لو حصلت
         st.error(f"⚠️ Error loading {symbol}: {e}")
         return None, "Error", "Error", "Error"
 
