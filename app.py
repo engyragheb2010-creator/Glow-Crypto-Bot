@@ -155,9 +155,11 @@ for sym in symbols:
     is_sqz_active = any(t['symbol'] == sym and t['type'] == "Squeeze" and t.get('status') == 'active' for t in portfolio)
         
     with col1:
-        st.markdown(f"**{sym.replace(':USDT','')}** - ${price}")
-        st.caption(f"`{debug_info}`") # شاشة الأشعة
-        st.write(f"Signal: {brk_signal}")
+        st.markdown(f"### {sym.replace(':USDT','')}")
+        st.markdown(f"**💰 Price:** ${price}")
+        st.info(f"📊 {debug_info}") 
+        st.write(f"**Signal:** {brk_signal}")
+        
         if "BUY" in brk_signal or "SELL" in brk_signal:
             if is_brk_active:
                 st.caption("🔒 Already Running")
@@ -169,9 +171,11 @@ for sym in symbols:
         st.write("---")
 
     with col2:
-        st.markdown(f"**{sym.replace(':USDT','')}** - ${price}")
-        st.caption(f"`{debug_info}`") # شاشة الأشعة
-        st.write(f"Signal: {sqz_signal}")
+        st.markdown(f"### {sym.replace(':USDT','')}")
+        st.markdown(f"**💰 Price:** ${price}")
+        st.info(f"📊 {debug_info}") 
+        st.write(f"**Signal:** {sqz_signal}")
+        
         if "BUY" in sqz_signal or "SELL" in sqz_signal:
             if is_sqz_active:
                 st.caption("🔒 Already Running")
@@ -238,7 +242,6 @@ with col3:
             else:
                 title_status = f"{pnl:.2f}%"
                 
-            # التعديل هنا: عنوان الكارت بيعرض المود واسم الاستراتيجية
             strat_icon = "💥" if "Breakout" in trade['type'] else "🗜️"
             expander_title = f"{trade['symbol'].replace(':USDT','')} | {trade['mode']} | {strat_icon} | {title_status}"
             
