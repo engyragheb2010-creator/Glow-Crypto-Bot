@@ -2,6 +2,7 @@ import streamlit as st
 import ccxt
 import pandas as pd
 import pandas_ta as ta
+import time
 
 st.set_page_config(page_title="Glow Crypto Dashboard", layout="wide")
 
@@ -12,7 +13,8 @@ def get_portfolio():
 portfolio = get_portfolio()
 
 exchange = ccxt.okx({
-    'options': {'defaultType': 'swap'}
+    'options': {'defaultType': 'swap'},
+    'enableRateLimit': True # حماية إضافية من المنصة
 })
 symbols = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'BNB/USDT:USDT', 'SOL/USDT:USDT']
 
@@ -72,18 +74,21 @@ def analyze_crypto(symbol, current_mode):
         df_4h = pd.DataFrame(bars_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df_4h['ema200'] = ta.ema(df_4h['close'], length=200)
         trend_4h_up = df_4h.iloc[-1]['close'] > df_4h.iloc[-1]['ema200']
+        time.sleep(0.1) # استراحة صغيرة لمنع البلوك
         
         # 2. 1H Trend
         bars_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=250)
         df_1h = pd.DataFrame(bars_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df_1h['ema200'] = ta.ema(df_1h['close'], length=200)
         trend_1h_up = df_1h.iloc[-1]['close'] > df_1h.iloc[-1]['ema200']
+        time.sleep(0.1)
         
         # 3. 15m Trend
         bars_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=250)
         df_15m = pd.DataFrame(bars_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df_15m['ema200'] = ta.ema(df_15m['close'], length=200)
         trend_15m_up = df_15m.iloc[-1]['close'] > df_15m.iloc[-1]['ema200']
+        time.sleep(0.1)
 
         # 4. 5m Entry & Volume
         bars_5m = exchange.fetch_ohlcv(symbol, timeframe='5m', limit=100)
@@ -93,16 +98,15 @@ def analyze_crypto(symbol, current_mode):
         last_5m = df_5m.iloc[-1]
         high_volume = last_5m['volume'] > last_5m['vol_sma']
 
-        # --- تحديد شروط الاتجاه حسب النظام المختار ---
+        # --- تحديد شروط الاتجاه ---
         if "Pro" in current_mode:
             trend_up = trend_4h_up and trend_1h_up and trend_15m_up
             trend_down = (not trend_4h_up) and (not trend_1h_up) and (not trend_15m_up)
         else:
-            # Action Mode: يعتمد على فريم 15 دقيقة بس عشان يكون أسرع
             trend_up = trend_15m_up
             trend_down = not trend_15m_up
 
-        # Debug String (شاشة الأشعة)
+        # Debug String 
         d_4h = "🟢" if trend_4h_up else "🔴"
         d_1h = "🟢" if trend_1h_up else "🔴"
         d_15m = "🟢" if trend_15m_up else "🔴"
@@ -134,6 +138,8 @@ def analyze_crypto(symbol, current_mode):
             
         return price, sqz_signal, brk_signal, debug_info
     except Exception as e:
+        # هنا البوت هيكتبلك سبب المشكلة على الشاشة لو حصلت
+        st.error(f"⚠️ Error loading {symbol}: {e}")
         return None, "Error", "Error", "Error"
 
 col1, col2, col3 = st.columns([1, 1, 1.2])
