@@ -43,7 +43,9 @@ def add_trade(symbol, entry_price, trade_type, direction):
         'tp1': tp1,
         'tp2': tp2,
         'sl': sl,
-        'sl_moved': False 
+        'sl_moved': False,
+        'status': 'active', 
+        'exit_price': 0.0   
     })
 
 def close_trade(index):
@@ -101,16 +103,15 @@ for sym in symbols:
     if price is None:
         continue
         
-    # فحص هل الصفقة متسجلة حالياً في المحفظة
-    is_brk_active = any(t['symbol'] == sym and t['type'] == "Breakout/SMC" for t in portfolio)
-    is_sqz_active = any(t['symbol'] == sym and t['type'] == "Squeeze" for t in portfolio)
+    is_brk_active = any(t['symbol'] == sym and t['type'] == "Breakout/SMC" and t.get('status') == 'active' for t in portfolio)
+    is_sqz_active = any(t['symbol'] == sym and t['type'] == "Squeeze" and t.get('status') == 'active' for t in portfolio)
         
     with col1:
         st.markdown(f"**{sym.replace(':USDT','')}** - ${price}")
         st.write(f"Signal: {brk_signal}")
         if "BUY" in brk_signal or "SELL" in brk_signal:
             if is_brk_active:
-                st.success("✅ Active in Portfolio")
+                st.caption("🔒 Already Running")
             else:
                 if st.button(f"Add to Portfolio 💥", key=f"brk_{sym}"):
                     add_trade(sym, price, "Breakout/SMC", brk_signal)
@@ -122,7 +123,7 @@ for sym in symbols:
         st.write(f"Signal: {sqz_signal}")
         if "BUY" in sqz_signal or "SELL" in sqz_signal:
             if is_sqz_active:
-                st.success("✅ Active in Portfolio")
+                st.caption("🔒 Already Running")
             else:
                 if st.button(f"Add to Portfolio 🗜️", key=f"sqz_{sym}"):
                     add_trade(sym, price, "Squeeze", sqz_signal)
@@ -134,44 +135,87 @@ with col3:
         st.info("No open trades currently.")
     else:
         for i, trade in enumerate(portfolio):
-            st.markdown(f"#### {trade['symbol'].replace(':USDT','')}")
-            st.write(f"**Signal:** {trade['direction']} ({trade['type']})")
-            st.write(f"**Entry Price:** ${trade['entry_price']}")
             
-            try:
-                ticker = exchange.fetch_ticker(trade['symbol'])
-                current_price = ticker['last']
-                
-                if not trade['sl_moved']:
-                    if "BUY" in trade['direction'] and current_price >= trade['tp1']:
-                        portfolio[i]['sl'] = trade['entry_price']
-                        portfolio[i]['sl_moved'] = True
-                    elif "SELL" in trade['direction'] and current_price <= trade['tp1']:
-                        portfolio[i]['sl'] = trade['entry_price']
-                        portfolio[i]['sl_moved'] = True
-                
-                if "BUY" in trade['direction']:
-                    pnl = ((current_price - trade['entry_price']) / trade['entry_price']) * 100
-                else: 
-                    pnl = ((trade['entry_price'] - current_price) / trade['entry_price']) * 100
+            display_price = trade['entry_price'] 
+            
+            if trade.get('status', 'active') == 'active':
+                try:
+                    ticker = exchange.fetch_ticker(trade['symbol'])
+                    current_price = ticker['last']
                     
-                pnl_color = "green" if pnl > 0 else "red"
+                    if not trade['sl_moved']:
+                        if "BUY" in trade['direction'] and current_price >= trade['tp1']:
+                            trade['sl'] = trade['entry_price']
+                            trade['sl_moved'] = True
+                        elif "SELL" in trade['direction'] and current_price <= trade['tp1']:
+                            trade['sl'] = trade['entry_price']
+                            trade['sl_moved'] = True
+                    
+                    if "BUY" in trade['direction']:
+                        if current_price >= trade['tp2']:
+                            trade['status'] = 'hit_tp2'
+                            trade['exit_price'] = trade['tp2'] 
+                        elif current_price <= trade['sl']:
+                            trade['status'] = 'hit_sl'
+                            trade['exit_price'] = trade['sl']  
+                    else:
+                        if current_price <= trade['tp2']:
+                            trade['status'] = 'hit_tp2'
+                            trade['exit_price'] = trade['tp2']
+                        elif current_price >= trade['sl']:
+                            trade['status'] = 'hit_sl'
+                            trade['exit_price'] = trade['sl']
+                            
+                    display_price = current_price if trade['status'] == 'active' else trade['exit_price']
+                except:
+                    display_price = trade['entry_price']
+            else:
+                display_price = trade['exit_price']
                 
-                st.markdown(f"**Current Price:** ${current_price}")
+            if "BUY" in trade['direction']:
+                pnl = ((display_price - trade['entry_price']) / trade['entry_price']) * 100
+            else: 
+                pnl = ((trade['entry_price'] - display_price) / trade['entry_price']) * 100
+            
+            pnl_color = "green" if pnl > 0 else "red"
+            
+            # تحديد العنوان الخارجي للكارت
+            if trade['status'] == 'hit_tp2':
+                title_status = "🎉 Won"
+            elif trade['status'] == 'hit_sl':
+                title_status = "🛡️ Break-even" if trade['sl_moved'] else "🛑 Lost"
+            else:
+                title_status = f"{pnl:.2f}%"
+                
+            expander_title = f"{trade['symbol'].replace(':USDT','')} | {trade['direction'][:4].strip()} | {title_status}"
+            
+            # تصميم الكارت القابل للطي (يظهر مقفول لتقليل السكرول)
+            with st.expander(expander_title, expanded=False):
+                st.write(f"**Strategy:** {trade['type']}")
+                st.write(f"**Entry Price:** ${trade['entry_price']}")
+                
+                if trade['status'] == 'active':
+                    st.markdown(f"**Live Price:** ${display_price}")
+                else:
+                    st.markdown(f"**Exit Price:** ${display_price}")
+                    
                 st.markdown(f"**PnL:** <span style='color:{pnl_color}; font-size:18px;'><b>{pnl:.2f}%</b></span>", unsafe_allow_html=True)
                 
-                st.write(f"🎯 **Target 1:** ${trade['tp1']:.2f}")
-                st.write(f"🚀 **Target 2:** ${trade['tp2']:.2f}")
-                
-                if trade['sl_moved']:
-                    st.success(f"✅ Trade Secured! (SL = Entry: ${trade['sl']:.2f})")
+                if trade['status'] == 'hit_tp2':
+                    st.success("🎉 **Status: Hit Target 2**")
+                elif trade['status'] == 'hit_sl':
+                    if trade['sl_moved']:
+                        st.warning("🛡️ **Status: Closed at Entry (Break-even)**")
+                    else:
+                        st.error("🛑 **Status: Hit Stop Loss**")
                 else:
-                    st.warning(f"🛑 **Stop Loss:** ${trade['sl']:.2f}")
+                    st.write(f"🎯 **Target 1:** ${trade['tp1']:.2f}")
+                    st.write(f"🚀 **Target 2:** ${trade['tp2']:.2f}")
+                    if trade['sl_moved']:
+                        st.success(f"✅ Trade Secured! (SL = Entry: ${trade['sl']:.2f})")
+                    else:
+                        st.warning(f"🛑 **Stop Loss:** ${trade['sl']:.2f}")
                     
-            except:
-                st.write("Updating price...")
-                
-            if st.button("❌ Close Trade", key=f"close_{i}"):
-                close_trade(i)
-                st.rerun()
-            st.write("---")
+                if st.button("❌ Remove from Portfolio", key=f"close_{i}"):
+                    close_trade(i)
+                    st.rerun()
