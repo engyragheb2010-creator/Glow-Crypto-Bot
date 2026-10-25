@@ -169,10 +169,9 @@ for sym in symbols:
             if is_brk_active:
                 st.caption("🔒 Already Running")
             else:
-                if st.button(f"Add 💥", key=f"brk_{sym}"):
-                    mode_label = "🎯 Pro" if "Pro" in trading_mode else "🔥 Action"
-                    add_trade(sym, price, "Breakout/SMC", brk_signal, mode_label)
-                    st.rerun()
+                mode_label = "🎯 Pro" if "Pro" in trading_mode else "🔥 Action"
+                # استخدام on_click لتنفيذ الإضافة فوراً
+                st.button(f"Add 💥", key=f"brk_{sym}", on_click=add_trade, args=(sym, price, "Breakout/SMC", brk_signal, mode_label))
         st.write("---")
 
     with col2:
@@ -185,10 +184,9 @@ for sym in symbols:
             if is_sqz_active:
                 st.caption("🔒 Already Running")
             else:
-                if st.button(f"Add 🗜️", key=f"sqz_{sym}"):
-                    mode_label = "🎯 Pro" if "Pro" in trading_mode else "🔥 Action"
-                    add_trade(sym, price, "Squeeze", sqz_signal, mode_label)
-                    st.rerun()
+                mode_label = "🎯 Pro" if "Pro" in trading_mode else "🔥 Action"
+                # استخدام on_click لتنفيذ الإضافة فوراً
+                st.button(f"Add 🗜️", key=f"sqz_{sym}", on_click=add_trade, args=(sym, price, "Squeeze", sqz_signal, mode_label))
         st.write("---")
 
 with col3:
