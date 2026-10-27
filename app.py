@@ -16,6 +16,7 @@ exchange = ccxt.okx({
     'options': {'defaultType': 'swap'},
     'enableRateLimit': True 
 })
+# تقدري تزودي أو تعدلي العملات من هنا
 symbols = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'BNB/USDT:USDT', 'SOL/USDT:USDT']
 
 # --- القائمة الجانبية (Sidebar) ---
@@ -27,7 +28,7 @@ trading_mode = st.sidebar.radio(
 )
 st.sidebar.write("---")
 if "Pro" in trading_mode:
-    st.sidebar.info("**Pro Sniper:** Requires 4H, 1H, and 15m trends to match perfectly + High Volume.")
+    st.sidebar.info("**Pro Sniper (Updated):** Requires 1H and 15m trends to match perfectly + High Volume. (4H removed for faster adaptation to market pumps).")
 else:
     st.sidebar.warning("**Action Mode:** Relies only on the 15m trend for faster entries. Higher risk of fakeouts.")
 
@@ -69,36 +70,29 @@ def close_trade(index):
 
 def analyze_crypto(symbol, current_mode):
     try:
-        # 1. 4H Trend
-        bars_4h = exchange.fetch_ohlcv(symbol, timeframe='4h', limit=250)
-        df_4h = pd.DataFrame(bars_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        df_4h['ema200'] = ta.ema(df_4h['close'], length=200)
-        trend_4h_up = df_4h.iloc[-1]['close'] > df_4h.iloc[-1]['ema200']
-        time.sleep(0.1) 
-        
-        # 2. 1H Trend
+        # 1. 1H Trend (المؤشر الرئيسي الجديد بدل الـ 4 ساعات)
         bars_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=250)
         df_1h = pd.DataFrame(bars_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df_1h['ema200'] = ta.ema(df_1h['close'], length=200)
         trend_1h_up = df_1h.iloc[-1]['close'] > df_1h.iloc[-1]['ema200']
         time.sleep(0.1)
         
-        # 3. 15m Trend
+        # 2. 15m Trend (مؤشر التأكيد والـ Action)
         bars_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=250)
         df_15m = pd.DataFrame(bars_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df_15m['ema200'] = ta.ema(df_15m['close'], length=200)
         trend_15m_up = df_15m.iloc[-1]['close'] > df_15m.iloc[-1]['ema200']
         time.sleep(0.1)
 
-        # 4. 5m Entry & Volume
+        # 3. 5m Entry & Volume (نقطة الدخول والسيولة)
         bars_5m = exchange.fetch_ohlcv(symbol, timeframe='5m', limit=100)
         df_5m = pd.DataFrame(bars_5m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df_5m['vol_sma'] = ta.sma(df_5m['volume'], length=20)
         
-        # --- تحديد شروط الاتجاه ---
+        # --- تحديد شروط الاتجاه بالخلطة الجديدة ---
         if "Pro" in current_mode:
-            trend_up = trend_4h_up and trend_1h_up and trend_15m_up
-            trend_down = (not trend_4h_up) and (not trend_1h_up) and (not trend_15m_up)
+            trend_up = trend_1h_up and trend_15m_up
+            trend_down = (not trend_1h_up) and (not trend_15m_up)
         else:
             trend_up = trend_15m_up
             trend_down = not trend_15m_up
@@ -116,17 +110,15 @@ def analyze_crypto(symbol, current_mode):
         df_5m['fvg_bull'] = (df_5m['low'] > df_5m['high'].shift(2)) & (df_5m['close'].shift(1) > df_5m['open'].shift(1))
         df_5m['fvg_bear'] = (df_5m['high'] < df_5m['low'].shift(2)) & (df_5m['close'].shift(1) < df_5m['open'].shift(1))
         
-        # أخذ اللقطة بعد ما كل المؤشرات اتحسبت
         last_5m = df_5m.iloc[-1]
         price = last_5m['close']
         high_volume = last_5m['volume'] > last_5m['vol_sma']
 
-        # Debug String 
-        d_4h = "🟢" if trend_4h_up else "🔴"
+        # Debug String (تم التحديث عشان يظهر 1H و 15m بس)
         d_1h = "🟢" if trend_1h_up else "🔴"
         d_15m = "🟢" if trend_15m_up else "🔴"
         d_vol = "🔥" if high_volume else "❄️"
-        debug_info = f"4H:{d_4h} | 1H:{d_1h} | 15m:{d_15m} | Vol:{d_vol}"
+        debug_info = f"1H:{d_1h} | 15m:{d_15m} | Vol:{d_vol}"
 
         sqz_signal = "⏳ WAIT"
         if trend_up and last_5m['sqz_fired'] and high_volume: sqz_signal = "🟢 BUY"
@@ -170,7 +162,6 @@ for sym in symbols:
                 st.caption("🔒 Already Running")
             else:
                 mode_label = "🎯 Pro" if "Pro" in trading_mode else "🔥 Action"
-                # استخدام on_click لتنفيذ الإضافة فوراً
                 st.button(f"Add 💥", key=f"brk_{sym}", on_click=add_trade, args=(sym, price, "Breakout/SMC", brk_signal, mode_label))
         st.write("---")
 
@@ -185,7 +176,6 @@ for sym in symbols:
                 st.caption("🔒 Already Running")
             else:
                 mode_label = "🎯 Pro" if "Pro" in trading_mode else "🔥 Action"
-                # استخدام on_click لتنفيذ الإضافة فوراً
                 st.button(f"Add 🗜️", key=f"sqz_{sym}", on_click=add_trade, args=(sym, price, "Squeeze", sqz_signal, mode_label))
         st.write("---")
 
@@ -202,6 +192,7 @@ with col3:
                     ticker = exchange.fetch_ticker(trade['symbol'])
                     current_price = ticker['last']
                     
+                    # تأمين الصفقة بعد الهدف الأول
                     if not trade['sl_moved']:
                         if "BUY" in trade['direction'] and current_price >= trade['tp1']:
                             trade['sl'] = trade['entry_price']
@@ -210,6 +201,7 @@ with col3:
                             trade['sl'] = trade['entry_price']
                             trade['sl_moved'] = True
                     
+                    # ضرب الأهداف أو الاستوب
                     if "BUY" in trade['direction']:
                         if current_price >= trade['tp2']:
                             trade['status'] = 'hit_tp2'
@@ -231,6 +223,7 @@ with col3:
             else:
                 display_price = trade['exit_price']
                 
+            # حساب الخسارة أو المكسب
             if "BUY" in trade['direction']:
                 pnl = ((display_price - trade['entry_price']) / trade['entry_price']) * 100
             else: 
