@@ -17,7 +17,19 @@ exchange = ccxt.okx({
     'enableRateLimit': True 
 })
 
-symbols = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'BNB/USDT:USDT', 'SOL/USDT:USDT']
+# توسيع القائمة لنكتشف حركة العملات المختلفة
+symbols = [
+    'BTC/USDT:USDT', 
+    'ETH/USDT:USDT', 
+    'SOL/USDT:USDT', 
+    'BNB/USDT:USDT',
+    'XRP/USDT:USDT',
+    'ADA/USDT:USDT',
+    'AVAX/USDT:USDT',
+    'SUI/USDT:USDT',
+    'LINK/USDT:USDT',
+    'NEAR/USDT:USDT'
+]
 
 # --- القائمة الجانبية (Sidebar) ---
 st.sidebar.title("⚙️ Bot Settings")
@@ -38,7 +50,6 @@ if st.button("🔄 Update Prices Now"):
     pass 
 
 def add_trade(symbol, entry_price, trade_type, direction, mode):
-    # لمنع تكرار إضافة نفس العملات بنفس الاستراتيجية لو كانت نشطة بالفعل
     exists = any(t['symbol'] == symbol and t['type'] == trade_type and t.get('status') == 'active' for t in portfolio)
     if exists:
         return
@@ -81,13 +92,13 @@ def analyze_crypto(symbol, current_mode):
         df_1h = pd.DataFrame(bars_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df_1h['ema200'] = ta.ema(df_1h['close'], length=200)
         trend_1h_up = df_1h.iloc[-1]['close'] > df_1h.iloc[-1]['ema200']
-        time.sleep(0.1)
+        time.sleep(0.05)
         
         bars_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=250)
         df_15m = pd.DataFrame(bars_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df_15m['ema200'] = ta.ema(df_15m['close'], length=200)
         trend_15m_up = df_15m.iloc[-1]['close'] > df_15m.iloc[-1]['ema200']
-        time.sleep(0.1)
+        time.sleep(0.05)
 
         bars_5m = exchange.fetch_ohlcv(symbol, timeframe='5m', limit=100)
         df_5m = pd.DataFrame(bars_5m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -154,16 +165,16 @@ for sym in symbols:
         
     mode_label = "🎯 Pro" if "Pro" in trading_mode else "🔥 Action"
 
-    # --- الإضافة التلقائية (Auto-Add) لصفقات Breakout/SMC ---
     if "BUY" in brk_signal or "SELL" in brk_signal:
         add_trade(sym, price, "Breakout/SMC", brk_signal, mode_label)
 
-    # --- الإضافة التلقائية (Auto-Add) لصفقات Squeeze ---
     if "BUY" in sqz_signal or "SELL" in sqz_signal:
         add_trade(sym, price, "Squeeze", sqz_signal, mode_label)
         
+    clean_sym = sym.replace(':USDT','')
+    
     with col1:
-        st.markdown(f"### {sym.replace(':USDT','')}")
+        st.markdown(f"### {clean_sym}")
         st.markdown(f"**💰 Price:** ${price}")
         st.info(f"📊 {debug_info}") 
         st.write(f"**Signal:** {brk_signal}")
@@ -172,7 +183,7 @@ for sym in symbols:
         st.write("---")
 
     with col2:
-        st.markdown(f"### {sym.replace(':USDT','')}")
+        st.markdown(f"### {clean_sym}")
         st.markdown(f"**💰 Price:** ${price}")
         st.info(f"📊 {debug_info}") 
         st.write(f"**Signal:** {sqz_signal}")
@@ -185,7 +196,6 @@ with col3:
         st.info("No open trades currently. Waiting for signals...")
     else:
         for i, trade in enumerate(portfolio):
-            
             display_price = trade['entry_price'] 
             
             if trade.get('status', 'active') == 'active':
@@ -233,7 +243,7 @@ with col3:
                     unrealized_pnl = ((trade['entry_price'] - display_price) / trade['entry_price']) * 100
                 
                 if trade.get('tp1_executed', False):
-                    pnl = trade.get('realized_pnl', 0.5) + (unrealized_pnl * 0.5)
+                    pnl = trade.get('realized_pnl', 0.5) + (unrealized_pln * 0.5)
                 else:
                     pnl = unrealized_pnl
             else:
@@ -241,7 +251,7 @@ with col3:
                     pnl = trade.get('realized_pnl', 0.5) + 1.0  
                 elif trade['status'] == 'hit_sl':
                     if trade.get('sl_moved', False):
-                        pnl = trade.get('realized_pln', 0.5) + 0.0  
+                        pnl = trade.get('realized_pnl', 0.5) + 0.0  
                     else:
                         pnl = -1.0  
                 else:
@@ -290,6 +300,6 @@ with col3:
                     else:
                         st.warning(f"🛑 **Stop Loss:** ${trade['sl']:.2f}")
                     
-                if st.button("❌ Remove Trade", key=f"close_{i}i"):
+                if st.button("❌ Remove Trade", key=f"close_{i}"):
                     close_trade(i)
                     st.rerun()
