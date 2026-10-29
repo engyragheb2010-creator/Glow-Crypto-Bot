@@ -61,10 +61,10 @@ def add_trade(symbol, entry_price, trade_type, direction, mode):
         'tp2': tp2,
         'sl': sl,
         'sl_moved': False,
-        'tp1_executed': False,  # تم إضافة متغير تتبع البيع الجزئي
+        'tp1_executed': False,  # تتبع البيع الجزئي
         'status': 'active', 
         'exit_price': 0.0,
-        'realized_pnl': 0.0     # لحساب ربح الجزء اللي اتباع عند الهدف الأول
+        'realized_pnl': 0.0     # ربح الجزء الأول المحقق
     })
 
 def close_trade(index):
@@ -191,21 +191,19 @@ with col3:
                     ticker = exchange.fetch_ticker(trade['symbol'])
                     current_price = ticker['last']
                     
-                    # منطق جني الأرباح الجزئي (Partial TP) وتأمين الباقي
-                    if not trade['tp1_executed']:
+                    # قراءة آمنة للمتغير لتجنب أي أخطاء KeyError مع الصفقات القديمة
+                    if not trade.get('tp1_executed', False):
                         if "BUY" in trade['direction'] and current_price >= trade['tp1']:
                             trade['tp1_executed'] = True
-                            trade['sl'] = trade['entry_price']  # نقل الاستوب لنقطة الدخول للباقي
+                            trade['sl'] = trade['entry_price']  
                             trade['sl_moved'] = True
-                            # حساب ربح النصف الأول المحقق (مثلاً 50% من الصفقة حققت 1%)
-                            trade['realized_pnl'] = 0.5 * 1.0  # 0.5% مكسب مضمون في الجيب
+                            trade['realized_pnl'] = 0.5 * 1.0  
                         elif "SELL" in trade['direction'] and current_price <= trade['tp1']:
                             trade['tp1_executed'] = True
                             trade['sl'] = trade['entry_price']
                             trade['sl_moved'] = True
                             trade['realized_pnl'] = 0.5 * 1.0
                     
-                    # التحقق من الهدف الثاني أو ضرب الاستوب للباقي
                     if "BUY" in trade['direction']:
                         if current_price >= trade['tp2']:
                             trade['status'] = 'hit_tp2'
@@ -227,26 +225,24 @@ with col3:
             else:
                 display_price = trade['exit_price']
                 
-            # حساب إجمالي الـ PnL (يشمل الجزء المحقق إذا وصل للتارجت الأول + الجزء المتبقي)
             if trade['status'] == 'active':
                 if "BUY" in trade['direction']:
                     unrealized_pnl = ((display_price - trade['entry_price']) / trade['entry_price']) * 100
                 else: 
                     unrealized_pnl = ((trade['entry_price'] - display_price) / trade['entry_price']) * 100
                 
-                # لو الهدف الأول اتفعل، النص اللي شغال بياخد وزنه، والنص التاني بيتحسب لحظياً
-                if trade['tp1_executed']:
-                    pnl = trade['realized_pnl'] + (unrealized_pnl * 0.5)
+                if trade.get('tp1_executed', False):
+                    pnl = trade.get('realized_pnl', 0.5) + (unrealized_pnl * 0.5)
                 else:
                     pnl = unrealized_pnl
             else:
                 if trade['status'] == 'hit_tp2':
-                    pnl = trade.get('realized_pnl', 0.5) + 1.0  # النص الأول (0.5%) + النص التاني لما جاب الهدف الثاني (1%) = 1.5% إجمالي
+                    pnl = trade.get('realized_pnl', 0.5) + 1.0  
                 elif trade['status'] == 'hit_sl':
-                    if trade['sl_moved']:
-                        pnl = trade.get('realized_pnl', 0.5) + 0.0  # خرجنا متعادل في النص التاني، وفضل في الجيب ربح النص الأول!
+                    if trade.get('sl_moved', False):
+                        pnl = trade.get('realized_pnl', 0.5) + 0.0  
                     else:
-                        pnl = -1.0  # ضرب الاستوب من غير ما يوصل للتارجت الأول
+                        pnl = -1.0  
                 else:
                     pnl = 0.0
 
@@ -255,9 +251,9 @@ with col3:
             if trade['status'] == 'hit_tp2':
                 title_status = "🎉 Won (Partial TP)"
             elif trade['status'] == 'hit_sl':
-                title_status = "🛡️ Break-even (Secured Profit)" if trade['sl_moved'] else "🛑 Lost"
+                title_status = "🛡️ Break-even (Secured Profit)" if trade.get('sl_moved', False) else "🛑 Lost"
             else:
-                title_status = f"{pnl:.2f}% (Partial Active)" if trade['tp1_executed'] else f"{pnl:.2f}%"
+                title_status = f"{pnl:.2f}% (Partial Active)" if trade.get('tp1_executed', False) else f"{pnl:.2f}%"
                 
             strat_icon = "💥" if "Breakout" in trade['type'] else "🗜️"
             expander_title = f"{trade['symbol'].replace(':USDT','')} | {trade['mode']} | {strat_icon} | {title_status}"
@@ -275,20 +271,20 @@ with col3:
                     
                 st.markdown(f"**Total PnL (with Partial):** <span style='color:{pnl_color}; font-size:18px;'><b>{pnl:.2f}%</b></span>", unsafe_allow_html=True)
                 
-                if trade['tp1_executed']:
+                if trade.get('tp1_executed', False):
                     st.success("✨ **Partial TP 1 Executed!** (50% profit secured in cash)")
 
                 if trade['status'] == 'hit_tp2':
                     st.success("🎉 **Status: Hit Target 2 (Full Win)**")
                 elif trade['status'] == 'hit_sl':
-                    if trade['sl_moved']:
+                    if trade.get('sl_moved', False):
                         st.warning("🛡️ **Status: Closed at Entry (Secured First Target Profit)**")
                     else:
                         st.error("🛑 **Status: Hit Stop Loss**")
                 else:
                     st.write(f"🎯 **Target 1:** ${trade['tp1']:.2f}")
                     st.write(f"🚀 **Target 2:** ${trade['tp2']:.2f}")
-                    if trade['sl_moved']:
+                    if trade.get('sl_moved', False):
                         st.success(f"✅ Trade Secured! (Remaining SL = Entry: ${trade['sl']:.2f})")
                     else:
                         st.warning(f"🛑 **Stop Loss:** ${trade['sl']:.2f}")
