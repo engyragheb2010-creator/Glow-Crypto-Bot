@@ -16,7 +16,7 @@ exchange = ccxt.okx({
     'options': {'defaultType': 'swap'},
     'enableRateLimit': True 
 })
-# تقدري تزودي أو تعدلي العملات من هنا
+
 symbols = ['BTC/USDT:USDT', 'ETH/USDT:USDT', 'BNB/USDT:USDT', 'SOL/USDT:USDT']
 
 # --- القائمة الجانبية (Sidebar) ---
@@ -28,9 +28,9 @@ trading_mode = st.sidebar.radio(
 )
 st.sidebar.write("---")
 if "Pro" in trading_mode:
-    st.sidebar.info("**Pro Sniper (Updated):** Requires 1H and 15m trends to match perfectly + High Volume. (4H removed for faster adaptation).")
+    st.sidebar.info("**Pro Sniper (Updated):** Requires 1H and 15m trends to match perfectly + High Volume.")
 else:
-    st.sidebar.warning("**Action Mode:** Relies only on the 15m trend for faster entries. Higher risk of fakeouts.")
+    st.sidebar.warning("**Action Mode:** Relies only on the 15m trend for faster entries.")
 
 st.title(f"🌟 Glow Crypto Dashboard - {trading_mode[:2]}")
 
@@ -61,8 +61,10 @@ def add_trade(symbol, entry_price, trade_type, direction, mode):
         'tp2': tp2,
         'sl': sl,
         'sl_moved': False,
+        'tp1_executed': False,  # تم إضافة متغير تتبع البيع الجزئي
         'status': 'active', 
-        'exit_price': 0.0   
+        'exit_price': 0.0,
+        'realized_pnl': 0.0     # لحساب ربح الجزء اللي اتباع عند الهدف الأول
     })
 
 def close_trade(index):
@@ -70,26 +72,22 @@ def close_trade(index):
 
 def analyze_crypto(symbol, current_mode):
     try:
-        # 1. 1H Trend 
         bars_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=250)
         df_1h = pd.DataFrame(bars_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df_1h['ema200'] = ta.ema(df_1h['close'], length=200)
         trend_1h_up = df_1h.iloc[-1]['close'] > df_1h.iloc[-1]['ema200']
         time.sleep(0.1)
         
-        # 2. 15m Trend
         bars_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=250)
         df_15m = pd.DataFrame(bars_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df_15m['ema200'] = ta.ema(df_15m['close'], length=200)
         trend_15m_up = df_15m.iloc[-1]['close'] > df_15m.iloc[-1]['ema200']
         time.sleep(0.1)
 
-        # 3. 5m Entry & Volume
         bars_5m = exchange.fetch_ohlcv(symbol, timeframe='5m', limit=100)
         df_5m = pd.DataFrame(bars_5m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df_5m['vol_sma'] = ta.sma(df_5m['volume'], length=20)
         
-        # تحديد شروط الاتجاه
         if "Pro" in current_mode:
             trend_up = trend_1h_up and trend_15m_up
             trend_down = (not trend_1h_up) and (not trend_15m_up)
@@ -97,7 +95,6 @@ def analyze_crypto(symbol, current_mode):
             trend_up = trend_15m_up
             trend_down = not trend_15m_up
 
-        # Squeeze Logic
         df_5m[['bb_lower', 'bb_mid', 'bb_upper']] = ta.bbands(df_5m['close'], length=20).iloc[:, :3]
         kc = ta.kc(df_5m['high'], df_5m['low'], df_5m['close'], length=20, scalar=1.5)
         df_5m['kc_lower'] = kc.iloc[:, 0]
@@ -106,7 +103,6 @@ def analyze_crypto(symbol, current_mode):
         df_5m['sqz_off'] = (df_5m['bb_lower'] < df_5m['kc_lower']) & (df_5m['bb_upper'] > df_5m['kc_upper'])
         df_5m['sqz_fired'] = df_5m['sqz_on'].shift(1) & df_5m['sqz_off']
         
-        # Breakout/SMC Logic
         df_5m['fvg_bull'] = (df_5m['low'] > df_5m['high'].shift(2)) & (df_5m['close'].shift(1) > df_5m['open'].shift(1))
         df_5m['fvg_bear'] = (df_5m['high'] < df_5m['low'].shift(2)) & (df_5m['close'].shift(1) < df_5m['open'].shift(1))
         
@@ -114,7 +110,6 @@ def analyze_crypto(symbol, current_mode):
         price = last_5m['close']
         high_volume = last_5m['volume'] > last_5m['vol_sma']
 
-        # Debug String
         d_1h = "🟢" if trend_1h_up else "🔴"
         d_15m = "🟢" if trend_15m_up else "🔴"
         d_vol = "🔥" if high_volume else "❄️"
@@ -144,7 +139,7 @@ with col1:
 with col2:
     st.header("🗜️ Squeeze")
 with col3:
-    st.header("💼 Smart Portfolio")
+    st.header("💼 Smart Portfolio (Partial TP)")
 
 for sym in symbols:
     price, sqz_signal, brk_signal, debug_info = analyze_crypto(sym, trading_mode)
@@ -152,7 +147,6 @@ for sym in symbols:
     if price is None:
         continue
         
-    # هنا التعديل السحري اللي بيفرق بين الشراء والبيع عشان الزرار مايقفلش غلط
     is_brk_active = any(t['symbol'] == sym and t['type'] == "Breakout/SMC" and t.get('status') == 'active' and t['direction'] in brk_signal for t in portfolio)
     is_sqz_active = any(t['symbol'] == sym and t['type'] == "Squeeze" and t.get('status') == 'active' and t['direction'] in sqz_signal for t in portfolio)
         
@@ -197,14 +191,21 @@ with col3:
                     ticker = exchange.fetch_ticker(trade['symbol'])
                     current_price = ticker['last']
                     
-                    if not trade['sl_moved']:
+                    # منطق جني الأرباح الجزئي (Partial TP) وتأمين الباقي
+                    if not trade['tp1_executed']:
                         if "BUY" in trade['direction'] and current_price >= trade['tp1']:
-                            trade['sl'] = trade['entry_price']
+                            trade['tp1_executed'] = True
+                            trade['sl'] = trade['entry_price']  # نقل الاستوب لنقطة الدخول للباقي
                             trade['sl_moved'] = True
+                            # حساب ربح النصف الأول المحقق (مثلاً 50% من الصفقة حققت 1%)
+                            trade['realized_pnl'] = 0.5 * 1.0  # 0.5% مكسب مضمون في الجيب
                         elif "SELL" in trade['direction'] and current_price <= trade['tp1']:
+                            trade['tp1_executed'] = True
                             trade['sl'] = trade['entry_price']
                             trade['sl_moved'] = True
+                            trade['realized_pnl'] = 0.5 * 1.0
                     
+                    # التحقق من الهدف الثاني أو ضرب الاستوب للباقي
                     if "BUY" in trade['direction']:
                         if current_price >= trade['tp2']:
                             trade['status'] = 'hit_tp2'
@@ -226,19 +227,37 @@ with col3:
             else:
                 display_price = trade['exit_price']
                 
-            if "BUY" in trade['direction']:
-                pnl = ((display_price - trade['entry_price']) / trade['entry_price']) * 100
-            else: 
-                pnl = ((trade['entry_price'] - display_price) / trade['entry_price']) * 100
-            
+            # حساب إجمالي الـ PnL (يشمل الجزء المحقق إذا وصل للتارجت الأول + الجزء المتبقي)
+            if trade['status'] == 'active':
+                if "BUY" in trade['direction']:
+                    unrealized_pnl = ((display_price - trade['entry_price']) / trade['entry_price']) * 100
+                else: 
+                    unrealized_pnl = ((trade['entry_price'] - display_price) / trade['entry_price']) * 100
+                
+                # لو الهدف الأول اتفعل، النص اللي شغال بياخد وزنه، والنص التاني بيتحسب لحظياً
+                if trade['tp1_executed']:
+                    pnl = trade['realized_pnl'] + (unrealized_pnl * 0.5)
+                else:
+                    pnl = unrealized_pnl
+            else:
+                if trade['status'] == 'hit_tp2':
+                    pnl = trade.get('realized_pnl', 0.5) + 1.0  # النص الأول (0.5%) + النص التاني لما جاب الهدف الثاني (1%) = 1.5% إجمالي
+                elif trade['status'] == 'hit_sl':
+                    if trade['sl_moved']:
+                        pnl = trade.get('realized_pnl', 0.5) + 0.0  # خرجنا متعادل في النص التاني، وفضل في الجيب ربح النص الأول!
+                    else:
+                        pnl = -1.0  # ضرب الاستوب من غير ما يوصل للتارجت الأول
+                else:
+                    pnl = 0.0
+
             pnl_color = "green" if pnl > 0 else "red"
             
             if trade['status'] == 'hit_tp2':
-                title_status = "🎉 Won"
+                title_status = "🎉 Won (Partial TP)"
             elif trade['status'] == 'hit_sl':
-                title_status = "🛡️ Break-even" if trade['sl_moved'] else "🛑 Lost"
+                title_status = "🛡️ Break-even (Secured Profit)" if trade['sl_moved'] else "🛑 Lost"
             else:
-                title_status = f"{pnl:.2f}%"
+                title_status = f"{pnl:.2f}% (Partial Active)" if trade['tp1_executed'] else f"{pnl:.2f}%"
                 
             strat_icon = "💥" if "Breakout" in trade['type'] else "🗜️"
             expander_title = f"{trade['symbol'].replace(':USDT','')} | {trade['mode']} | {strat_icon} | {title_status}"
@@ -254,23 +273,26 @@ with col3:
                 else:
                     st.markdown(f"**Exit Price:** ${display_price}")
                     
-                st.markdown(f"**PnL:** <span style='color:{pnl_color}; font-size:18px;'><b>{pnl:.2f}%</b></span>", unsafe_allow_html=True)
+                st.markdown(f"**Total PnL (with Partial):** <span style='color:{pnl_color}; font-size:18px;'><b>{pnl:.2f}%</b></span>", unsafe_allow_html=True)
                 
+                if trade['tp1_executed']:
+                    st.success("✨ **Partial TP 1 Executed!** (50% profit secured in cash)")
+
                 if trade['status'] == 'hit_tp2':
-                    st.success("🎉 **Status: Hit Target 2**")
+                    st.success("🎉 **Status: Hit Target 2 (Full Win)**")
                 elif trade['status'] == 'hit_sl':
                     if trade['sl_moved']:
-                        st.warning("🛡️ **Status: Closed at Entry (Break-even)**")
+                        st.warning("🛡️ **Status: Closed at Entry (Secured First Target Profit)**")
                     else:
                         st.error("🛑 **Status: Hit Stop Loss**")
                 else:
                     st.write(f"🎯 **Target 1:** ${trade['tp1']:.2f}")
                     st.write(f"🚀 **Target 2:** ${trade['tp2']:.2f}")
                     if trade['sl_moved']:
-                        st.success(f"✅ Trade Secured! (SL = Entry: ${trade['sl']:.2f})")
+                        st.success(f"✅ Trade Secured! (Remaining SL = Entry: ${trade['sl']:.2f})")
                     else:
                         st.warning(f"🛑 **Stop Loss:** ${trade['sl']:.2f}")
                     
-                if st.button("❌ Remove Trade", key=f"close_{i}"):
+                if st.button("❌ Remove Trade", key=f"close_{i}i"):
                     close_trade(i)
                     st.rerun()
