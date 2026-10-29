@@ -243,7 +243,7 @@ with col3:
                     unrealized_pnl = ((trade['entry_price'] - display_price) / trade['entry_price']) * 100
                 
                 if trade.get('tp1_executed', False):
-                    pnl = trade.get('realized_pnl', 0.5) + (unrealized_pln * 0.5)
+                    pnl = trade.get('realized_pnl', 0.5) + (unrealized_pnl * 0.5)
                 else:
                     pnl = unrealized_pnl
             else:
