@@ -38,6 +38,11 @@ if st.button("🔄 Update Prices Now"):
     pass 
 
 def add_trade(symbol, entry_price, trade_type, direction, mode):
+    # لمنع تكرار إضافة نفس العملات بنفس الاستراتيجية لو كانت نشطة بالفعل
+    exists = any(t['symbol'] == symbol and t['type'] == trade_type and t.get('status') == 'active' for t in portfolio)
+    if exists:
+        return
+
     tp1_pct = 0.01  
     tp2_pct = 0.02  
     sl_pct = 0.01   
@@ -61,10 +66,10 @@ def add_trade(symbol, entry_price, trade_type, direction, mode):
         'tp2': tp2,
         'sl': sl,
         'sl_moved': False,
-        'tp1_executed': False,  # تتبع البيع الجزئي
+        'tp1_executed': False,  
         'status': 'active', 
         'exit_price': 0.0,
-        'realized_pnl': 0.0     # ربح الجزء الأول المحقق
+        'realized_pnl': 0.0     
     })
 
 def close_trade(index):
@@ -139,7 +144,7 @@ with col1:
 with col2:
     st.header("🗜️ Squeeze")
 with col3:
-    st.header("💼 Smart Portfolio (Partial TP)")
+    st.header("💼 Smart Portfolio (Auto-Pilot)")
 
 for sym in symbols:
     price, sqz_signal, brk_signal, debug_info = analyze_crypto(sym, trading_mode)
@@ -147,21 +152,23 @@ for sym in symbols:
     if price is None:
         continue
         
-    is_brk_active = any(t['symbol'] == sym and t['type'] == "Breakout/SMC" and t.get('status') == 'active' and t['direction'] in brk_signal for t in portfolio)
-    is_sqz_active = any(t['symbol'] == sym and t['type'] == "Squeeze" and t.get('status') == 'active' and t['direction'] in sqz_signal for t in portfolio)
+    mode_label = "🎯 Pro" if "Pro" in trading_mode else "🔥 Action"
+
+    # --- الإضافة التلقائية (Auto-Add) لصفقات Breakout/SMC ---
+    if "BUY" in brk_signal or "SELL" in brk_signal:
+        add_trade(sym, price, "Breakout/SMC", brk_signal, mode_label)
+
+    # --- الإضافة التلقائية (Auto-Add) لصفقات Squeeze ---
+    if "BUY" in sqz_signal or "SELL" in sqz_signal:
+        add_trade(sym, price, "Squeeze", sqz_signal, mode_label)
         
     with col1:
         st.markdown(f"### {sym.replace(':USDT','')}")
         st.markdown(f"**💰 Price:** ${price}")
         st.info(f"📊 {debug_info}") 
         st.write(f"**Signal:** {brk_signal}")
-        
         if "BUY" in brk_signal or "SELL" in brk_signal:
-            if is_brk_active:
-                st.caption("🔒 Already Running")
-            else:
-                mode_label = "🎯 Pro" if "Pro" in trading_mode else "🔥 Action"
-                st.button(f"Add 💥", key=f"brk_{sym}", on_click=add_trade, args=(sym, price, "Breakout/SMC", brk_signal, mode_label))
+            st.success("🤖 Auto-Running")
         st.write("---")
 
     with col2:
@@ -169,18 +176,13 @@ for sym in symbols:
         st.markdown(f"**💰 Price:** ${price}")
         st.info(f"📊 {debug_info}") 
         st.write(f"**Signal:** {sqz_signal}")
-        
         if "BUY" in sqz_signal or "SELL" in sqz_signal:
-            if is_sqz_active:
-                st.caption("🔒 Already Running")
-            else:
-                mode_label = "🎯 Pro" if "Pro" in trading_mode else "🔥 Action"
-                st.button(f"Add 🗜️", key=f"sqz_{sym}", on_click=add_trade, args=(sym, price, "Squeeze", sqz_signal, mode_label))
+            st.success("🤖 Auto-Running")
         st.write("---")
 
 with col3:
     if len(portfolio) == 0:
-        st.info("No open trades currently.")
+        st.info("No open trades currently. Waiting for signals...")
     else:
         for i, trade in enumerate(portfolio):
             
@@ -191,7 +193,6 @@ with col3:
                     ticker = exchange.fetch_ticker(trade['symbol'])
                     current_price = ticker['last']
                     
-                    # قراءة آمنة للمتغير لتجنب أي أخطاء KeyError مع الصفقات القديمة
                     if not trade.get('tp1_executed', False):
                         if "BUY" in trade['direction'] and current_price >= trade['tp1']:
                             trade['tp1_executed'] = True
@@ -240,7 +241,7 @@ with col3:
                     pnl = trade.get('realized_pnl', 0.5) + 1.0  
                 elif trade['status'] == 'hit_sl':
                     if trade.get('sl_moved', False):
-                        pnl = trade.get('realized_pnl', 0.5) + 0.0  
+                        pnl = trade.get('realized_pln', 0.5) + 0.0  
                     else:
                         pnl = -1.0  
                 else:
