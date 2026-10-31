@@ -3,6 +3,7 @@ import ccxt
 import pandas as pd
 import pandas_ta as ta
 import time
+from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Glow Crypto Dashboard", layout="wide")
 
@@ -10,7 +11,16 @@ st.set_page_config(page_title="Glow Crypto Dashboard", layout="wide")
 def get_portfolio():
     return []
 
+# ذاكرة للاحتفاظ بوقت إغلاق الصفقات لكل عملة (نظام فترة الراحة)
+@st.cache_resource
+def get_cooldowns():
+    return {}
+
 portfolio = get_portfolio()
+cooldowns = get_cooldowns()
+
+# تحديد فترة الراحة بالدقائق (ساعتين)
+COOLDOWN_MINUTES = 120 
 
 exchange = ccxt.okx({
     'options': {'defaultType': 'swap'},
@@ -83,7 +93,10 @@ def add_trade(symbol, entry_price, trade_type, direction, mode):
         'realized_pnl': 0.0     
     })
 
+# 👈 تعديل دالة القفل اليدوي عشان تفعل فترة الراحة
 def close_trade(index):
+    trade = portfolio[index]
+    cooldowns[trade['symbol']] = datetime.now() 
     portfolio.pop(index)
 
 def analyze_crypto(symbol, current_mode):
@@ -164,15 +177,28 @@ for sym in symbols:
         continue
         
     mode_label = "🎯 Pro" if "Pro" in trading_mode else "🔥 Action"
-
-    if "BUY" in brk_signal or "SELL" in brk_signal:
-        add_trade(sym, price, "Breakout/SMC", brk_signal, mode_label)
-
-    if "BUY" in sqz_signal or "SELL" in sqz_signal:
-        add_trade(sym, price, "Squeeze", sqz_signal, mode_label)
-        
     clean_sym = sym.replace(':USDT','')
     
+    # 👈 نظام التحقق من فترة الراحة (Cooldown)
+    on_cooldown = False
+    if sym in cooldowns:
+        elapsed = datetime.now() - cooldowns[sym]
+        if elapsed < timedelta(minutes=COOLDOWN_MINUTES):
+            on_cooldown = True
+            rem_mins = COOLDOWN_MINUTES - int(elapsed.total_seconds() / 60)
+            debug_info += f" | ⏳ Resting: {rem_mins}m"
+    
+    if on_cooldown:
+        if "BUY" in brk_signal or "SELL" in brk_signal:
+            brk_signal = "⏸️ BLOCKED (Cooldown)"
+        if "BUY" in sqz_signal or "SELL" in sqz_signal:
+            sqz_signal = "⏸️ BLOCKED (Cooldown)"
+    else:
+        if "BUY" in brk_signal or "SELL" in brk_signal:
+            add_trade(sym, price, "Breakout/SMC", brk_signal, mode_label)
+        if "BUY" in sqz_signal or "SELL" in sqz_signal:
+            add_trade(sym, price, "Squeeze", sqz_signal, mode_label)
+
     with col1:
         st.markdown(f"### {clean_sym}")
         st.markdown(f"**💰 Price:** ${price}")
@@ -180,6 +206,8 @@ for sym in symbols:
         st.write(f"**Signal:** {brk_signal}")
         if "BUY" in brk_signal or "SELL" in brk_signal:
             st.success("🤖 Auto-Running")
+        elif "BLOCKED" in brk_signal:
+            st.warning("⏳ Cooling Down")
         st.write("---")
 
     with col2:
@@ -189,6 +217,8 @@ for sym in symbols:
         st.write(f"**Signal:** {sqz_signal}")
         if "BUY" in sqz_signal or "SELL" in sqz_signal:
             st.success("🤖 Auto-Running")
+        elif "BLOCKED" in sqz_signal:
+            st.warning("⏳ Cooling Down")
         st.write("---")
 
 with col3:
@@ -219,16 +249,20 @@ with col3:
                         if current_price >= trade['tp2']:
                             trade['status'] = 'hit_tp2'
                             trade['exit_price'] = trade['tp2'] 
+                            cooldowns[trade['symbol']] = datetime.now() # تفعيل الراحة
                         elif current_price <= trade['sl']:
                             trade['status'] = 'hit_sl'
                             trade['exit_price'] = trade['sl']  
+                            cooldowns[trade['symbol']] = datetime.now() # تفعيل الراحة
                     else:
                         if current_price <= trade['tp2']:
                             trade['status'] = 'hit_tp2'
                             trade['exit_price'] = trade['tp2']
+                            cooldowns[trade['symbol']] = datetime.now() # تفعيل الراحة
                         elif current_price >= trade['sl']:
                             trade['status'] = 'hit_sl'
                             trade['exit_price'] = trade['sl']
+                            cooldowns[trade['symbol']] = datetime.now() # تفعيل الراحة
                             
                     display_price = current_price if trade['status'] == 'active' else trade['exit_price']
                 except:
