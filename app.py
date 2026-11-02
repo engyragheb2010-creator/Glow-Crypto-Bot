@@ -27,7 +27,6 @@ exchange = ccxt.okx({
     'enableRateLimit': True 
 })
 
-# توسيع القائمة لنكتشف حركة العملات المختلفة
 symbols = [
     'BTC/USDT:USDT', 
     'ETH/USDT:USDT', 
@@ -60,7 +59,8 @@ if st.button("🔄 Update Prices Now"):
     pass 
 
 def add_trade(symbol, entry_price, trade_type, direction, mode):
-    exists = any(t['symbol'] == symbol and t['type'] == trade_type and t.get('status') == 'active' for t in portfolio)
+    # 👈 التعديل الأول: نمنع الدخول تماماً لو العملة موجودة في المحفظة بأي حالة (حتى لو مقفولة وكسبانة)
+    exists = any(t['symbol'] == symbol for t in portfolio)
     if exists:
         return
 
@@ -93,10 +93,12 @@ def add_trade(symbol, entry_price, trade_type, direction, mode):
         'realized_pnl': 0.0     
     })
 
-# 👈 تعديل دالة القفل اليدوي عشان تفعل فترة الراحة
 def close_trade(index):
     trade = portfolio[index]
-    cooldowns[trade['symbol']] = datetime.now() 
+    # 👈 التعديل التاني: نديها كول داون بس لو قفلتيها وهي لسه شغالة (Active)
+    # لكن لو مقفولة من بدري واخدت الكول داون بتاعها، مش هنرستر العداد تاني
+    if trade.get('status', 'active') == 'active':
+        cooldowns[trade['symbol']] = datetime.now() 
     portfolio.pop(index)
 
 def analyze_crypto(symbol, current_mode):
@@ -168,7 +170,7 @@ with col1:
 with col2:
     st.header("🗜️ Squeeze")
 with col3:
-    st.header("💼 Smart Portfolio (Auto-Pilot)")
+    st.header("💼 Smart Portfolio")
 
 for sym in symbols:
     price, sqz_signal, brk_signal, debug_info = analyze_crypto(sym, trading_mode)
@@ -179,7 +181,6 @@ for sym in symbols:
     mode_label = "🎯 Pro" if "Pro" in trading_mode else "🔥 Action"
     clean_sym = sym.replace(':USDT','')
     
-    # 👈 نظام التحقق من فترة الراحة (Cooldown)
     on_cooldown = False
     if sym in cooldowns:
         elapsed = datetime.now() - cooldowns[sym]
@@ -249,20 +250,20 @@ with col3:
                         if current_price >= trade['tp2']:
                             trade['status'] = 'hit_tp2'
                             trade['exit_price'] = trade['tp2'] 
-                            cooldowns[trade['symbol']] = datetime.now() # تفعيل الراحة
+                            cooldowns[trade['symbol']] = datetime.now() # 👈 الراحة التلقائية هنا
                         elif current_price <= trade['sl']:
                             trade['status'] = 'hit_sl'
                             trade['exit_price'] = trade['sl']  
-                            cooldowns[trade['symbol']] = datetime.now() # تفعيل الراحة
+                            cooldowns[trade['symbol']] = datetime.now() # 👈 الراحة التلقائية هنا
                     else:
                         if current_price <= trade['tp2']:
                             trade['status'] = 'hit_tp2'
                             trade['exit_price'] = trade['tp2']
-                            cooldowns[trade['symbol']] = datetime.now() # تفعيل الراحة
+                            cooldowns[trade['symbol']] = datetime.now() # 👈 الراحة التلقائية هنا
                         elif current_price >= trade['sl']:
                             trade['status'] = 'hit_sl'
                             trade['exit_price'] = trade['sl']
-                            cooldowns[trade['symbol']] = datetime.now() # تفعيل الراحة
+                            cooldowns[trade['symbol']] = datetime.now() # 👈 الراحة التلقائية هنا
                             
                     display_price = current_price if trade['status'] == 'active' else trade['exit_price']
                 except:
