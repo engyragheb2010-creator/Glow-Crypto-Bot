@@ -1,4 +1,6 @@
 streamlit
 ccxt
 pandas
-pandas_ta
+pandas-ta
+streamlit-autorefresh
+
