@@ -27,6 +27,12 @@ exchange = ccxt.okx({
     'enableRateLimit': True 
 })
 
+# الدالة السحرية للـ Caching لمنع التعليق والتحميل المتكرر
+@st.cache_data(ttl=15, show_spinner=False)
+def fetch_cached_ohlcv(symbol, timeframe, limit):
+    time.sleep(0.2) 
+    return exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+
 symbols = [
     'BTC/USDT:USDT', 
     'ETH/USDT:USDT', 
@@ -49,7 +55,7 @@ trading_mode = st.sidebar.radio(
 )
 st.sidebar.write("---")
 if "Pro" in trading_mode:
-    st.sidebar.info("**Pro Sniper (Updated):** Requires 1H and 15m trends to match perfectly + High Volume.")
+    st.sidebar.info("**Pro Sniper:** Requires 1H and 15m trends to match perfectly + High Volume.")
 else:
     st.sidebar.warning("**Action Mode:** Relies only on the 15m trend for faster entries.")
 
@@ -59,7 +65,6 @@ if st.button("🔄 Update Prices Now"):
     pass 
 
 def add_trade(symbol, entry_price, trade_type, direction, mode):
-    # نمنع الدخول تماماً لو العملة موجودة في المحفظة بأي حالة (شغالة أو مقفولة)
     exists = any(t['symbol'] == symbol for t in portfolio)
     if exists:
         return
@@ -95,27 +100,23 @@ def add_trade(symbol, entry_price, trade_type, direction, mode):
 
 def close_trade(index):
     trade = portfolio[index]
-    # نديها كول داون بس لو قفلتيها وهي لسه شغالة (Active)
-    # لكن لو مقفولة من بدري واخدت الكول داون بتاعها، مش هنرستر العداد تاني
     if trade.get('status', 'active') == 'active':
         cooldowns[trade['symbol']] = datetime.now() 
     portfolio.pop(index)
 
 def analyze_crypto(symbol, current_mode):
     try:
-        bars_1h = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=250)
+        bars_1h = fetch_cached_ohlcv(symbol, timeframe='1h', limit=250)
         df_1h = pd.DataFrame(bars_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df_1h['ema200'] = ta.ema(df_1h['close'], length=200)
         trend_1h_up = df_1h.iloc[-1]['close'] > df_1h.iloc[-1]['ema200']
-        time.sleep(0.05)
         
-        bars_15m = exchange.fetch_ohlcv(symbol, timeframe='15m', limit=250)
+        bars_15m = fetch_cached_ohlcv(symbol, timeframe='15m', limit=250)
         df_15m = pd.DataFrame(bars_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df_15m['ema200'] = ta.ema(df_15m['close'], length=200)
         trend_15m_up = df_15m.iloc[-1]['close'] > df_15m.iloc[-1]['ema200']
-        time.sleep(0.05)
-
-        bars_5m = exchange.fetch_ohlcv(symbol, timeframe='5m', limit=100)
+        
+        bars_5m = fetch_cached_ohlcv(symbol, timeframe='5m', limit=100)
         df_5m = pd.DataFrame(bars_5m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df_5m['vol_sma'] = ta.sma(df_5m['volume'], length=20)
         
@@ -160,13 +161,12 @@ def analyze_crypto(symbol, current_mode):
             
         return price, sqz_signal, brk_signal, debug_info
     except Exception as e:
-        st.error(f"⚠️ Error loading {symbol}: {e}")
         return None, "Error", "Error", "Error"
 
 col1, col2, col3 = st.columns([1, 1, 1.2])
 
 with col1:
-    st.header("💥 Breakout/SMC")
+    st.header("💥 Breakout")
 with col2:
     st.header("🗜️ Squeeze")
 with col3:
@@ -251,23 +251,23 @@ with col3:
                             trade['status'] = 'hit_tp2'
                             trade['exit_price'] = trade['tp2'] 
                             cooldowns[trade['symbol']] = datetime.now()
-                            st.rerun() # تحديث فوري للشاشة وتفعيل الراحة
+                            st.rerun() 
                         elif current_price <= trade['sl']:
                             trade['status'] = 'hit_sl'
                             trade['exit_price'] = trade['sl']  
                             cooldowns[trade['symbol']] = datetime.now()
-                            st.rerun() # تحديث فوري للشاشة وتفعيل الراحة
+                            st.rerun()
                     else:
                         if current_price <= trade['tp2']:
                             trade['status'] = 'hit_tp2'
                             trade['exit_price'] = trade['tp2']
                             cooldowns[trade['symbol']] = datetime.now()
-                            st.rerun() # تحديث فوري للشاشة وتفعيل الراحة
+                            st.rerun()
                         elif current_price >= trade['sl']:
                             trade['status'] = 'hit_sl'
                             trade['exit_price'] = trade['sl']
                             cooldowns[trade['symbol']] = datetime.now()
-                            st.rerun() # تحديث فوري للشاشة وتفعيل الراحة
+                            st.rerun()
                             
                     display_price = current_price if trade['status'] == 'active' else trade['exit_price']
                 except:
