@@ -1,17 +1,20 @@
-import streamlit as st
+ import streamlit as st
 import ccxt
 import pandas as pd
 import pandas_ta as ta
 import time
 from datetime import datetime, timedelta
+from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(page_title="Glow Crypto Dashboard", layout="wide")
+
+# تحديث الشاشة آلياً كل 60 ثانية 
+st_autorefresh(interval=60000, limit=None, key="auto_refresh")
 
 @st.cache_resource
 def get_portfolio():
     return []
 
-# ذاكرة للاحتفاظ بوقت إغلاق الصفقات لكل عملة (نظام فترة الراحة)
 @st.cache_resource
 def get_cooldowns():
     return {}
@@ -19,7 +22,6 @@ def get_cooldowns():
 portfolio = get_portfolio()
 cooldowns = get_cooldowns()
 
-# تحديد فترة الراحة بالدقائق (ساعتين)
 COOLDOWN_MINUTES = 120 
 
 exchange = ccxt.okx({
@@ -27,7 +29,6 @@ exchange = ccxt.okx({
     'enableRateLimit': True 
 })
 
-# الدالة السحرية للـ Caching لمنع التعليق والتحميل المتكرر
 @st.cache_data(ttl=15, show_spinner=False)
 def fetch_cached_ohlcv(symbol, timeframe, limit):
     time.sleep(0.2) 
@@ -54,33 +55,35 @@ trading_mode = st.sidebar.radio(
     ["🎯 Pro Sniper (Safest)", "🔥 Action Mode (Faster)"]
 )
 st.sidebar.write("---")
-if "Pro" in trading_mode:
-    st.sidebar.info("**Pro Sniper:** Requires 1H and 15m trends to match perfectly + High Volume.")
-else:
-    st.sidebar.warning("**Action Mode:** Relies only on the 15m trend for faster entries.")
+
+max_open_trades = st.sidebar.number_input("Max Open Trades", min_value=1, max_value=10, value=2, step=1)
+
+st.sidebar.write("---")
+st.sidebar.subheader("📐 Dynamic ATR Settings")
+st.sidebar.info("SL and TP are now based on actual market volatility (ATR) instead of fixed %.")
+atr_sl_mult = st.sidebar.slider("Stop Loss (ATR Multiplier)", 1.0, 3.0, 1.5, step=0.1)
+atr_tp1_mult = st.sidebar.slider("Target 1 (ATR Multiplier)", 1.0, 3.0, 1.5, step=0.1)
+atr_tp2_mult = st.sidebar.slider("Target 2 (ATR Multiplier)", 2.0, 6.0, 3.0, step=0.1)
 
 st.title(f"🌟 Glow Crypto Dashboard - {trading_mode[:2]}")
 
-if st.button("🔄 Update Prices Now"):
+if st.button("🔄 Force Update Now"):
     pass 
 
-def add_trade(symbol, entry_price, trade_type, direction, mode):
+def add_trade(symbol, entry_price, trade_type, direction, mode, atr_value):
     exists = any(t['symbol'] == symbol for t in portfolio)
     if exists:
         return
 
-    tp1_pct = 0.01  
-    tp2_pct = 0.02  
-    sl_pct = 0.01   
-    
+    # حساب الـ SL و الـ TP بناءً على الـ ATR
     if "BUY" in direction:
-        tp1 = entry_price * (1 + tp1_pct)
-        tp2 = entry_price * (1 + tp2_pct)
-        sl = entry_price * (1 - sl_pct)
+        sl = entry_price - (atr_value * atr_sl_mult)
+        tp1 = entry_price + (atr_value * atr_tp1_mult)
+        tp2 = entry_price + (atr_value * atr_tp2_mult)
     else: 
-        tp1 = entry_price * (1 - tp1_pct)
-        tp2 = entry_price * (1 - tp2_pct)
-        sl = entry_price * (1 + sl_pct)
+        sl = entry_price + (atr_value * atr_sl_mult)
+        tp1 = entry_price - (atr_value * atr_tp1_mult)
+        tp2 = entry_price - (atr_value * atr_tp2_mult)
         
     portfolio.append({
         'symbol': symbol,
@@ -88,6 +91,7 @@ def add_trade(symbol, entry_price, trade_type, direction, mode):
         'type': trade_type,
         'direction': direction,
         'mode': mode,
+        'atr_used': atr_value, # حفظ قيمة الـ ATR اللي دخلنا بيها
         'tp1': tp1,
         'tp2': tp2,
         'sl': sl,
@@ -114,6 +118,11 @@ def analyze_crypto(symbol, current_mode):
         bars_15m = fetch_cached_ohlcv(symbol, timeframe='15m', limit=250)
         df_15m = pd.DataFrame(bars_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df_15m['ema200'] = ta.ema(df_15m['close'], length=200)
+        
+        # حساب الـ ATR على فريم الـ 15 دقيقة (عشان يكون أهدى وأدق للستوب لوز)
+        df_15m['atr'] = ta.atr(df_15m['high'], df_15m['low'], df_15m['close'], length=14)
+        current_atr = df_15m.iloc[-1]['atr']
+        
         trend_15m_up = df_15m.iloc[-1]['close'] > df_15m.iloc[-1]['ema200']
         
         bars_5m = fetch_cached_ohlcv(symbol, timeframe='5m', limit=100)
@@ -146,10 +155,7 @@ def analyze_crypto(symbol, current_mode):
         d_15m = "🟢" if trend_15m_up else "🔴"
         d_vol = "🔥" if high_volume else "❄️"
         
-        if "Action" in current_mode:
-            debug_info = f"15m:{d_15m} | Vol:{d_vol}"
-        else:
-            debug_info = f"1H:{d_1h} | 15m:{d_15m} | Vol:{d_vol}"
+        debug_info = f"1H:{d_1h} | 15m:{d_15m} | Vol:{d_vol} | ATR: {current_atr:.4f}"
 
         sqz_signal = "⏳ WAIT"
         if trend_up and last_5m['sqz_fired'] and high_volume: sqz_signal = "🟢 BUY"
@@ -159,9 +165,9 @@ def analyze_crypto(symbol, current_mode):
         if trend_up and last_5m['fvg_bull'] and high_volume: brk_signal = "🟢 BUY"
         elif trend_down and last_5m['fvg_bear'] and high_volume: brk_signal = "🔴 SELL"
             
-        return price, sqz_signal, brk_signal, debug_info
+        return price, sqz_signal, brk_signal, debug_info, current_atr
     except Exception as e:
-        return None, "Error", "Error", "Error"
+        return None, "Error", "Error", "Error", 0
 
 col1, col2, col3 = st.columns([1, 1, 1.2])
 
@@ -173,13 +179,15 @@ with col3:
     st.header("💼 Smart Portfolio")
 
 for sym in symbols:
-    price, sqz_signal, brk_signal, debug_info = analyze_crypto(sym, trading_mode)
-    
-    if price is None:
+    result = analyze_crypto(sym, trading_mode)
+    if result[0] is None:
         continue
+    price, sqz_signal, brk_signal, debug_info, current_atr = result
         
     mode_label = "🎯 Pro" if "Pro" in trading_mode else "🔥 Action"
     clean_sym = sym.replace(':USDT','')
+    
+    active_trades_count = len([t for t in portfolio if t.get('status', 'active') == 'active'])
     
     on_cooldown = False
     if sym in cooldowns:
@@ -190,25 +198,32 @@ for sym in symbols:
             debug_info += f" | ⏳ Resting: {rem_mins}m"
     
     if on_cooldown:
-        if "BUY" in brk_signal or "SELL" in brk_signal:
-            brk_signal = "⏸️ BLOCKED (Cooldown)"
-        if "BUY" in sqz_signal or "SELL" in sqz_signal:
-            sqz_signal = "⏸️ BLOCKED (Cooldown)"
+        if "BUY" in brk_signal or "SELL" in brk_signal: brk_signal = "⏸️ BLOCKED (Cooldown)"
+        if "BUY" in sqz_signal or "SELL" in sqz_signal: sqz_signal = "⏸️ BLOCKED (Cooldown)"
+    elif active_trades_count >= max_open_trades and not any(t['symbol'] == sym and t.get('status') == 'active' for t in portfolio):
+        if "BUY" in brk_signal or "SELL" in brk_signal: brk_signal = "⏸️ BLOCKED (Max Trades)"
+        if "BUY" in sqz_signal or "SELL" in sqz_signal: sqz_signal = "⏸️ BLOCKED (Max Trades)"
     else:
         if "BUY" in brk_signal or "SELL" in brk_signal:
-            add_trade(sym, price, "Breakout/SMC", brk_signal, mode_label)
-        if "BUY" in sqz_signal or "SELL" in sqz_signal:
-            add_trade(sym, price, "Squeeze", sqz_signal, mode_label)
+            add_trade(sym, price, "Breakout/SMC", brk_signal, mode_label, current_atr)
+            active_trades_count += 1
+            
+        if active_trades_count < max_open_trades:
+            if "BUY" in sqz_signal or "SELL" in sqz_signal:
+                add_trade(sym, price, "Squeeze", sqz_signal, mode_label, current_atr)
+                active_trades_count += 1
+        else:
+            if "BUY" in sqz_signal or "SELL" in sqz_signal:
+                sqz_signal = "⏸️ BLOCKED (Max Trades)"
 
     with col1:
         st.markdown(f"### {clean_sym}")
         st.markdown(f"**💰 Price:** ${price}")
         st.info(f"📊 {debug_info}") 
         st.write(f"**Signal:** {brk_signal}")
-        if "BUY" in brk_signal or "SELL" in brk_signal:
-            st.success("🤖 Auto-Running")
-        elif "BLOCKED" in brk_signal:
-            st.warning("⏳ Cooling Down")
+        if "BUY" in brk_signal or "SELL" in brk_signal: st.success("🤖 Auto-Running")
+        elif "Cooldown" in brk_signal: st.warning("⏳ Cooling Down")
+        elif "Max Trades" in brk_signal: st.error("🛑 Blocked (Portfolio Full)")
         st.write("---")
 
     with col2:
@@ -216,10 +231,9 @@ for sym in symbols:
         st.markdown(f"**💰 Price:** ${price}")
         st.info(f"📊 {debug_info}") 
         st.write(f"**Signal:** {sqz_signal}")
-        if "BUY" in sqz_signal or "SELL" in sqz_signal:
-            st.success("🤖 Auto-Running")
-        elif "BLOCKED" in sqz_signal:
-            st.warning("⏳ Cooling Down")
+        if "BUY" in sqz_signal or "SELL" in sqz_signal: st.success("🤖 Auto-Running")
+        elif "Cooldown" in sqz_signal: st.warning("⏳ Cooling Down")
+        elif "Max Trades" in sqz_signal: st.error("🛑 Blocked (Portfolio Full)")
         st.write("---")
 
 with col3:
@@ -239,12 +253,12 @@ with col3:
                             trade['tp1_executed'] = True
                             trade['sl'] = trade['entry_price']  
                             trade['sl_moved'] = True
-                            trade['realized_pnl'] = 0.5 * 1.0  
+                            trade['realized_pnl'] = 0.5 * (((trade['tp1'] - trade['entry_price'])/trade['entry_price'])*100)
                         elif "SELL" in trade['direction'] and current_price <= trade['tp1']:
                             trade['tp1_executed'] = True
                             trade['sl'] = trade['entry_price']
                             trade['sl_moved'] = True
-                            trade['realized_pnl'] = 0.5 * 1.0
+                            trade['realized_pnl'] = 0.5 * (((trade['entry_price'] - trade['tp1'])/trade['entry_price'])*100)
                     
                     if "BUY" in trade['direction']:
                         if current_price >= trade['tp2']:
@@ -282,26 +296,27 @@ with col3:
                     unrealized_pnl = ((trade['entry_price'] - display_price) / trade['entry_price']) * 100
                 
                 if trade.get('tp1_executed', False):
-                    pnl = trade.get('realized_pnl', 0.5) + (unrealized_pnl * 0.5)
+                    pnl = trade.get('realized_pnl', 0.0) + (unrealized_pnl * 0.5)
                 else:
                     pnl = unrealized_pnl
             else:
-                if trade['status'] == 'hit_tp2':
-                    pnl = trade.get('realized_pnl', 0.5) + 1.0  
-                elif trade['status'] == 'hit_sl':
-                    if trade.get('sl_moved', False):
-                        pnl = trade.get('realized_pnl', 0.5) + 0.0  
-                    else:
-                        pnl = -1.0  
+                # الحساب النهائي بعد إغلاق الصفقة
+                if "BUY" in trade['direction']:
+                    final_unrealized = ((trade['exit_price'] - trade['entry_price']) / trade['entry_price']) * 100
                 else:
-                    pnl = 0.0
+                    final_unrealized = ((trade['entry_price'] - trade['exit_price']) / trade['entry_price']) * 100
+                
+                if trade.get('tp1_executed', False):
+                    pnl = trade.get('realized_pnl', 0.0) + (final_unrealized * 0.5)
+                else:
+                    pnl = final_unrealized
 
             pnl_color = "green" if pnl > 0 else "red"
             
             if trade['status'] == 'hit_tp2':
-                title_status = "🎉 Won (Partial TP)"
+                title_status = f"🎉 Won ({pnl:.2f}%)"
             elif trade['status'] == 'hit_sl':
-                title_status = "🛡️ Break-even (Secured Profit)" if trade.get('sl_moved', False) else "🛑 Lost"
+                title_status = f"🛡️ Break-even ({pnl:.2f}%)" if trade.get('sl_moved', False) else f"🛑 Lost ({pnl:.2f}%)"
             else:
                 title_status = f"{pnl:.2f}% (Partial Active)" if trade.get('tp1_executed', False) else f"{pnl:.2f}%"
                 
@@ -314,12 +329,15 @@ with col3:
                 st.write(f"**Direction:** {trade['direction']}")
                 st.write(f"**Entry Price:** ${trade['entry_price']}")
                 
+                # حساب نسبة الستوب لوز الديناميكية عشان تشوفيها بعينك
+                dyn_sl_pct = abs(trade['entry_price'] - trade['sl']) / trade['entry_price'] * 100
+                
                 if trade['status'] == 'active':
                     st.markdown(f"**Live Price:** ${display_price}")
                 else:
                     st.markdown(f"**Exit Price:** ${display_price}")
                     
-                st.markdown(f"**Total PnL (with Partial):** <span style='color:{pnl_color}; font-size:18px;'><b>{pnl:.2f}%</b></span>", unsafe_allow_html=True)
+                st.markdown(f"**Total PnL:** <span style='color:{pnl_color}; font-size:18px;'><b>{pnl:.2f}%</b></span>", unsafe_allow_html=True)
                 
                 if trade.get('tp1_executed', False):
                     st.success("✨ **Partial TP 1 Executed!** (50% profit secured in cash)")
@@ -332,6 +350,7 @@ with col3:
                     else:
                         st.error("🛑 **Status: Hit Stop Loss**")
                 else:
+                    st.info(f"📏 **Dynamic Risk (ATR):** SL is ~{dyn_sl_pct:.2f}% away from entry")
                     st.write(f"🎯 **Target 1:** ${trade['tp1']:.2f}")
                     st.write(f"🚀 **Target 2:** ${trade['tp2']:.2f}")
                     if trade.get('sl_moved', False):
@@ -342,3 +361,4 @@ with col3:
                 if st.button("❌ Remove Trade", key=f"close_{i}"):
                     close_trade(i)
                     st.rerun()
+             
