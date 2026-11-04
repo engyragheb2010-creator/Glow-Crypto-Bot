@@ -59,7 +59,7 @@ if st.button("🔄 Update Prices Now"):
     pass 
 
 def add_trade(symbol, entry_price, trade_type, direction, mode):
-    # 👈 التعديل الأول: نمنع الدخول تماماً لو العملة موجودة في المحفظة بأي حالة (حتى لو مقفولة وكسبانة)
+    # نمنع الدخول تماماً لو العملة موجودة في المحفظة بأي حالة (شغالة أو مقفولة)
     exists = any(t['symbol'] == symbol for t in portfolio)
     if exists:
         return
@@ -95,7 +95,7 @@ def add_trade(symbol, entry_price, trade_type, direction, mode):
 
 def close_trade(index):
     trade = portfolio[index]
-    # 👈 التعديل التاني: نديها كول داون بس لو قفلتيها وهي لسه شغالة (Active)
+    # نديها كول داون بس لو قفلتيها وهي لسه شغالة (Active)
     # لكن لو مقفولة من بدري واخدت الكول داون بتاعها، مش هنرستر العداد تاني
     if trade.get('status', 'active') == 'active':
         cooldowns[trade['symbol']] = datetime.now() 
@@ -250,20 +250,24 @@ with col3:
                         if current_price >= trade['tp2']:
                             trade['status'] = 'hit_tp2'
                             trade['exit_price'] = trade['tp2'] 
-                            cooldowns[trade['symbol']] = datetime.now() # 👈 الراحة التلقائية هنا
+                            cooldowns[trade['symbol']] = datetime.now()
+                            st.rerun() # تحديث فوري للشاشة وتفعيل الراحة
                         elif current_price <= trade['sl']:
                             trade['status'] = 'hit_sl'
                             trade['exit_price'] = trade['sl']  
-                            cooldowns[trade['symbol']] = datetime.now() # 👈 الراحة التلقائية هنا
+                            cooldowns[trade['symbol']] = datetime.now()
+                            st.rerun() # تحديث فوري للشاشة وتفعيل الراحة
                     else:
                         if current_price <= trade['tp2']:
                             trade['status'] = 'hit_tp2'
                             trade['exit_price'] = trade['tp2']
-                            cooldowns[trade['symbol']] = datetime.now() # 👈 الراحة التلقائية هنا
+                            cooldowns[trade['symbol']] = datetime.now()
+                            st.rerun() # تحديث فوري للشاشة وتفعيل الراحة
                         elif current_price >= trade['sl']:
                             trade['status'] = 'hit_sl'
                             trade['exit_price'] = trade['sl']
-                            cooldowns[trade['symbol']] = datetime.now() # 👈 الراحة التلقائية هنا
+                            cooldowns[trade['symbol']] = datetime.now()
+                            st.rerun() # تحديث فوري للشاشة وتفعيل الراحة
                             
                     display_price = current_price if trade['status'] == 'active' else trade['exit_price']
                 except:
