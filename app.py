@@ -56,7 +56,8 @@ trading_mode = st.sidebar.radio(
 )
 st.sidebar.write("---")
 
-max_open_trades = st.sidebar.number_input("Max Open Trades", min_value=1, max_value=10, value=2, step=1)
+max_open_trades = st.sidebar.number_input("Max Open Trades", min_value=1, max_value=10, value=10
+                                          , step=1)
 
 st.sidebar.write("---")
 st.sidebar.subheader("📐 Dynamic ATR Settings")
