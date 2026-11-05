@@ -4,55 +4,31 @@ import ccxt
 import pandas as pd
 import pandas_ta as ta
 import time
-import json
-import os
 
 # ==========================================
-# 1. إعدادات الشاشة الأساسية والتحديث التلقائي (كل 15 ثانية)
+# 1. إعدادات الشاشة الأساسية والتحديث التلقائي
 # ==========================================
 st.set_page_config(page_title="SMC Sniper Bot", layout="wide")
-st.title("🤖 SMC Sniper Bot - Paper Trading Simulator (Manual Control)")
+st.title("🤖 SMC Sniper Bot - Paper Trading Simulator (Memory Mode)")
 
 st_autorefresh(interval=15000, limit=None, key="auto_refresh")
 
-# زرار التحديث اليدوي الفوري (Force Update)
 if st.button("🔄 Force Update Price / Refresh Now"):
     st.rerun()
 
 # ==========================================
-# 2. إعدادات البوت والذاكرة الدائمة (JSON)
+# 2. إعدادات الذاكرة الداخلية للبوت (Session State)
 # ==========================================
-MAX_OPEN_TRADES = 99  
 SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'LINK/USDT', 'NEAR/USDT', 'SUI/USDT', 'AVAX/USDT', 'ADA/USDT', 'XRP/USDT']
 
-DATA_FILE = 'trades_data.json'
-
-def load_data():
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, 'r') as f:
-                return json.load(f)
-        except:
-            return {'active_trades': {}, 'pending_orders': {}, 'resting_symbols': {}, 'realized_pnl': 0.0}
-    return {'active_trades': {}, 'pending_orders': {}, 'resting_symbols': {}, 'realized_pnl': 0.0}
-
-def save_data():
-    data = {
-        'active_trades': st.session_state.active_trades,
-        'pending_orders': st.session_state.pending_orders,
-        'resting_symbols': st.session_state.resting_symbols,
-        'realized_pnl': st.session_state.realized_pnl
-    }
-    with open(DATA_FILE, 'w') as f:
-        json.dump(data, f)
-
-if 'data_loaded' not in st.session_state:
-    saved_data = load_data()
-    st.session_state.active_trades = saved_data.get('active_trades', {})
-    st.session_state.pending_orders = saved_data.get('pending_orders', {})
-    st.session_state.resting_symbols = saved_data.get('resting_symbols', {})
-    st.session_state.realized_pnl = saved_data.get('realized_pnl', 0.0)
-    st.session_state.data_loaded = True
+if 'active_trades' not in st.session_state:
+    st.session_state.active_trades = {}
+if 'pending_orders' not in st.session_state:
+    st.session_state.pending_orders = {}
+if 'resting_symbols' not in st.session_state:
+    st.session_state.resting_symbols = {}
+if 'realized_pnl' not in st.session_state:
+    st.session_state.realized_pnl = 0.0
 
 # ==========================================
 # 3. الاتصال بمنصة OKX (للقراءة فقط)
@@ -65,7 +41,7 @@ except Exception as e:
     st.error(f"Error connecting to OKX: {e}")
 
 # ==========================================
-# 4. دوال التحليل الفني (SMC & ATR)
+# 4. دوال التحليل الفني (SMC, ATR & Trend Filter)
 # ==========================================
 def fetch_data(symbol, timeframe, limit=100):
     try:
@@ -77,17 +53,17 @@ def fetch_data(symbol, timeframe, limit=100):
         df['close'] = pd.to_numeric(df['close'], errors='coerce')
         
         atr_series = ta.atr(df['high'], df['low'], df['close'], length=14)
-        if atr_series is not None and not atr_series.empty:
-            df['ATR'] = atr_series
-        else:
-            df['ATR'] = 0.0
+        df['ATR'] = atr_series if atr_series is not None and not atr_series.empty else 0.0
+        
+        ema_series = ta.ema(df['close'], length=50)
+        df['EMA50'] = ema_series if ema_series is not None and not ema_series.empty else df['close']
             
         return df
     except Exception as e:
         return None
 
 def analyze_smc(df):
-    if df is None or len(df) < 3:
+    if df is None or len(df) < 50:
         return 'NONE', 0.0, 0.0
 
     last_close = df['close'].iloc[-1]
@@ -97,11 +73,12 @@ def analyze_smc(df):
     raw_atr = df['ATR'].iloc[-1] if 'ATR' in df.columns else 0.0
     atr_value = float(raw_atr) if (raw_atr is not None and not pd.isna(raw_atr)) else 0.0
     
-    if last_close > prev_high:
-        fvg_price = df['low'].iloc[-1] + (df['high'].iloc[-1] - df['low'].iloc[-1]) * 0.5
+    ema_val = df['EMA50'].iloc[-1] if 'EMA50' in df.columns else last_close
+    fvg_price = df['low'].iloc[-1] + (df['high'].iloc[-1] - df['low'].iloc[-1]) * 0.5
+    
+    if last_close > prev_high and last_close > ema_val:
         return 'BUY', fvg_price, atr_value
-    elif last_close < prev_low:
-        fvg_price = df['low'].iloc[-1] + (df['high'].iloc[-1] - df['low'].iloc[-1]) * 0.5
+    elif last_close < prev_low and last_close < ema_val:
         return 'SELL', fvg_price, atr_value
         
     return 'NONE', 0.0, 0.0
@@ -112,15 +89,15 @@ def analyze_smc(df):
 st.sidebar.metric(label="💰 Realized Profits (Closed/TP1)", value=f"${st.session_state.realized_pnl:.2f}")
 
 # ==========================================
-# 5. محرك التداول وإدارة الأهداف المحسّن
+# 5. محرك التداول وإدارة الأهداف (حذف يدوي فقط)
 # ==========================================
-st.subheader("📊 Live Market Scanner & Portfolio (Manual Control)")
+st.subheader("📊 Live Market Scanner & Portfolio (Memory Active)")
 col1, col2 = st.columns(2)
 
 with col1:
     st.markdown("### 🟢 Active Trades (Persistent)")
     if not st.session_state.active_trades:
-        st.info("No active trades yet. Waiting for breakouts or pending triggers...")
+        st.info("No active trades yet. Waiting for trend-filtered breakouts...")
         
     for sym, trade in list(st.session_state.active_trades.items()):
         try:
@@ -154,16 +131,13 @@ with col1:
             tp2_reached = live_price <= trade['tp2']
             tp1_reached = live_price <= trade['tp1']
 
-        # رصد الأهداف وتحديث المحفظة (الهدف الأول والثاني يضيفان أرباحاً حقيقية)
         if tp2_reached and pnl_pct > 0:
             if not trade.get('tp2_hit', False):
-                # إضافة أرباح الهدف الثاني (النص الباقي 50%) للمحفظة
                 tp2_gain_pct = abs((trade['tp2'] - trade['entry']) / trade['entry']) * 100
                 st.session_state.realized_pnl += (tp2_gain_pct * 0.5)
                 trade['tp2_hit'] = True
                 trade['tp1_hit'] = True
                 trade['sl'] = trade['entry']
-                save_data()
             status_msg = f"🚀 **تم ضرب الهدف الثاني (Target 2) لصفقة الـ {side} وإضافة باقي الأرباح للمحفظة! مستمرة لحين حذفها.**"
         elif tp1_reached and pnl_pct > 0:
             if not trade.get('tp1_hit', False):
@@ -171,7 +145,6 @@ with col1:
                 st.session_state.realized_pnl += (tp1_gain_pct * 0.5) 
                 trade['tp1_hit'] = True
                 trade['sl'] = trade['entry']  
-                save_data()
             status_msg = f"🎯 **تم ضرب الهدف الأول (Target 1) لصفقة الـ {side}، وتم أخذ الأرباح وتأمين الصفقة. مستمرة لحين حذفها يدويّاً.**"
         else:
             if not trade.get('tp1_hit', False):
@@ -189,7 +162,7 @@ with col1:
             - **Entry Price:** ${trade['entry']:.4f}
             - **Live Price:** ${live_price:.4f}
             - **Total PnL:** {pnl_text}
-            - **🎯 Target 1:** ${trade['tp1']:.4f} {"(✅ TP1 Hit & Secured)" if trade.get('tp1_hit') and pnl_pct > 0 else ""}
+            - **🎯 Target 1:** ${trade['tp1']:.4f} {"(✅ TP1 Hit & Added)" if trade.get('tp1_hit') and pnl_pct > 0 else ""}
             - **🚀 Target 2:** ${trade['tp2']:.4f} {"(🚀 TP2 Hit & Added)" if trade.get('tp2_hit') and pnl_pct > 0 else ""}
             - <span style='color:#ff4b4b'>**🛑 Stop Loss:** ${trade['sl']:.4f}</span>
             """, unsafe_allow_html=True)
@@ -197,7 +170,6 @@ with col1:
             st.markdown("---")
             if st.button(f"Remove {sym} (Manual)", key=f"remove_active_{sym}"):
                 del st.session_state.active_trades[sym]
-                save_data()  
                 st.rerun()
 
 with col2:
@@ -217,7 +189,6 @@ with col2:
             st.markdown("---")
             if st.button(f"Cancel {sym}", key=f"cancel_pending_{sym}"):
                 del st.session_state.pending_orders[sym]
-                save_data() 
                 st.rerun()
 
 st.markdown("---")
@@ -279,7 +250,6 @@ for symbol in SYMBOLS:
                 'tp2_hit': False
             }
             del st.session_state.pending_orders[symbol]
-            save_data() 
             st.rerun()
 
     if symbol in st.session_state.active_trades:
@@ -305,7 +275,6 @@ for symbol in SYMBOLS:
     if symbol in st.session_state.resting_symbols:
         if time.time() - st.session_state.resting_symbols[symbol] > 900: 
             del st.session_state.resting_symbols[symbol]
-            save_data()
         continue
 
     effective_atr_15m = atr_15m if atr_15m > 0 else (current_price * 0.01)
@@ -319,10 +288,9 @@ for symbol in SYMBOLS:
                 'mode': '🎯 Pro',
                 'side': signal_1h
             }
-            save_data() 
             st.rerun()
         except Exception as e:
-            st.error(f"Error placing Pro order for {symbol}: {e}")
+            st.error(f"Error placing Pro order for symbol: {e}")
 
     elif signal_15m in ['BUY', 'SELL']:
         try:
@@ -349,9 +317,8 @@ for symbol in SYMBOLS:
                 'tp1_hit': False,
                 'tp2_hit': False
             }
-            save_data() 
             st.rerun()
         except Exception as e:
-            st.error(f"Error placing Action order for {symbol}: {e}")
+            st.error(f"Error placing Action order for symbol: {e}")
 
 st.dataframe(market_radar_data, use_container_width=True)
