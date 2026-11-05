@@ -1,364 +1,183 @@
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 import ccxt
 import pandas as pd
 import pandas_ta as ta
 import time
-from datetime import datetime, timedelta
-from streamlit_autorefresh import st_autorefresh
 
-st.set_page_config(page_title="Glow Crypto Dashboard", layout="wide")
+# ==========================================
+# 1. إعدادات الشاشة الأساسية والتحديث التلقائي
+# ==========================================
+st.set_page_config(page_title="SMC Sniper Bot", layout="wide")
+st.title("🤖 SMC Sniper Bot - Paper Trading")
 
-# تحديث الشاشة آلياً كل 60 ثانية 
+# تحديث الشاشة كل دقيقة (60,000 ملي ثانية) لضمان متابعة الـ Resting والأهداف
 st_autorefresh(interval=60000, limit=None, key="auto_refresh")
 
-@st.cache_resource
-def get_portfolio():
-    return []
+# ==========================================
+# 2. إعدادات البوت وإدارة المخاطر
+# ==========================================
+MAX_OPEN_TRADES = 99  # بدون حد أقصى للـ Paper Trading
+SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'LINK/USDT', 'NEAR/USDT', 'SUI/USDT', 'AVAX/USDT', 'ADA/USDT', 'XRP/USDT']
 
-@st.cache_resource
-def get_cooldowns():
-    return {}
+# إعدادات الذاكرة المؤقتة (Session State)
+if 'active_trades' not in st.session_state:
+    st.session_state.active_trades = {}
+if 'pending_orders' not in st.session_state:
+    st.session_state.pending_orders = {}
+if 'resting_symbols' not in st.session_state:
+    st.session_state.resting_symbols = {}
 
-portfolio = get_portfolio()
-cooldowns = get_cooldowns()
-
-COOLDOWN_MINUTES = 120 
-
-exchange = ccxt.okx({
-    'options': {'defaultType': 'swap'},
-    'enableRateLimit': True 
-})
-
-@st.cache_data(ttl=15, show_spinner=False)
-def fetch_cached_ohlcv(symbol, timeframe, limit):
-    time.sleep(0.2) 
-    return exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
-
-symbols = [
-    'BTC/USDT:USDT', 
-    'ETH/USDT:USDT', 
-    'SOL/USDT:USDT', 
-    'BNB/USDT:USDT',
-    'XRP/USDT:USDT',
-    'ADA/USDT:USDT',
-    'AVAX/USDT:USDT',
-    'SUI/USDT:USDT',
-    'LINK/USDT:USDT',
-    'NEAR/USDT:USDT'
-]
-
-# --- القائمة الجانبية (Sidebar) ---
-st.sidebar.title("⚙️ Bot Settings")
-st.sidebar.write("Choose the strictness level:")
-trading_mode = st.sidebar.radio(
-    "Trading Mode", 
-    ["🎯 Pro Sniper (Safest)", "🔥 Action Mode (Faster)"]
-)
-st.sidebar.write("---")
-
-max_open_trades = st.sidebar.number_input("Max Open Trades", min_value=1, max_value=10, value=10
-                                          , step=1)
-
-st.sidebar.write("---")
-st.sidebar.subheader("📐 Dynamic ATR Settings")
-st.sidebar.info("SL and TP are now based on actual market volatility (ATR) instead of fixed %.")
-atr_sl_mult = st.sidebar.slider("Stop Loss (ATR Multiplier)", 1.0, 3.0, 1.5, step=0.1)
-atr_tp1_mult = st.sidebar.slider("Target 1 (ATR Multiplier)", 1.0, 3.0, 1.5, step=0.1)
-atr_tp2_mult = st.sidebar.slider("Target 2 (ATR Multiplier)", 2.0, 6.0, 3.0, step=0.1)
-
-st.title(f"🌟 Glow Crypto Dashboard - {trading_mode[:2]}")
-
-if st.button("🔄 Force Update Now"):
-    pass 
-
-def add_trade(symbol, entry_price, trade_type, direction, mode, atr_value):
-    exists = any(t['symbol'] == symbol for t in portfolio)
-    if exists:
-        return
-
-    # حساب الـ SL و الـ TP بناءً على الـ ATR
-    if "BUY" in direction:
-        sl = entry_price - (atr_value * atr_sl_mult)
-        tp1 = entry_price + (atr_value * atr_tp1_mult)
-        tp2 = entry_price + (atr_value * atr_tp2_mult)
-    else: 
-        sl = entry_price + (atr_value * atr_sl_mult)
-        tp1 = entry_price - (atr_value * atr_tp1_mult)
-        tp2 = entry_price - (atr_value * atr_tp2_mult)
-        
-    portfolio.append({
-        'symbol': symbol,
-        'entry_price': entry_price,
-        'type': trade_type,
-        'direction': direction,
-        'mode': mode,
-        'atr_used': atr_value, # حفظ قيمة الـ ATR اللي دخلنا بيها
-        'tp1': tp1,
-        'tp2': tp2,
-        'sl': sl,
-        'sl_moved': False,
-        'tp1_executed': False,  
-        'status': 'active', 
-        'exit_price': 0.0,
-        'realized_pnl': 0.0     
+# ==========================================
+# 3. الاتصال بمنصة OKX (Paper Trading)
+# ==========================================
+try:
+    exchange = ccxt.okx({
+        'apiKey': 'YOUR_API_KEY',       # ضعي مفاتيح الـ Demo هنا
+        'secret': 'YOUR_SECRET_KEY',
+        'password': 'YOUR_PASSWORD',
+        'enableRateLimit': True,
     })
+    exchange.set_sandbox_mode(True)  # تفعيل وضع Paper Trading
+except Exception as e:
+    st.error(f"Error connecting to OKX: {e}")
 
-def close_trade(index):
-    trade = portfolio[index]
-    if trade.get('status', 'active') == 'active':
-        cooldowns[trade['symbol']] = datetime.now() 
-    portfolio.pop(index)
-
-def analyze_crypto(symbol, current_mode):
+# ==========================================
+# 4. دوال التحليل الفني (SMC & ATR)
+# ==========================================
+def fetch_data(symbol, timeframe, limit=100):
     try:
-        bars_1h = fetch_cached_ohlcv(symbol, timeframe='1h', limit=250)
-        df_1h = pd.DataFrame(bars_1h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        df_1h['ema200'] = ta.ema(df_1h['close'], length=200)
-        trend_1h_up = df_1h.iloc[-1]['close'] > df_1h.iloc[-1]['ema200']
-        
-        bars_15m = fetch_cached_ohlcv(symbol, timeframe='15m', limit=250)
-        df_15m = pd.DataFrame(bars_15m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        df_15m['ema200'] = ta.ema(df_15m['close'], length=200)
-        
-        # حساب الـ ATR على فريم الـ 15 دقيقة (عشان يكون أهدى وأدق للستوب لوز)
-        df_15m['atr'] = ta.atr(df_15m['high'], df_15m['low'], df_15m['close'], length=14)
-        current_atr = df_15m.iloc[-1]['atr']
-        
-        trend_15m_up = df_15m.iloc[-1]['close'] > df_15m.iloc[-1]['ema200']
-        
-        bars_5m = fetch_cached_ohlcv(symbol, timeframe='5m', limit=100)
-        df_5m = pd.DataFrame(bars_5m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        df_5m['vol_sma'] = ta.sma(df_5m['volume'], length=20)
-        
-        if "Pro" in current_mode:
-            trend_up = trend_1h_up and trend_15m_up
-            trend_down = (not trend_1h_up) and (not trend_15m_up)
-        else:
-            trend_up = trend_15m_up
-            trend_down = not trend_15m_up
-
-        df_5m[['bb_lower', 'bb_mid', 'bb_upper']] = ta.bbands(df_5m['close'], length=20).iloc[:, :3]
-        kc = ta.kc(df_5m['high'], df_5m['low'], df_5m['close'], length=20, scalar=1.5)
-        df_5m['kc_lower'] = kc.iloc[:, 0]
-        df_5m['kc_upper'] = kc.iloc[:, 2]
-        df_5m['sqz_on'] = (df_5m['bb_lower'] > df_5m['kc_lower']) & (df_5m['bb_upper'] < df_5m['kc_upper'])
-        df_5m['sqz_off'] = (df_5m['bb_lower'] < df_5m['kc_lower']) & (df_5m['bb_upper'] > df_5m['kc_upper'])
-        df_5m['sqz_fired'] = df_5m['sqz_on'].shift(1) & df_5m['sqz_off']
-        
-        df_5m['fvg_bull'] = (df_5m['low'] > df_5m['high'].shift(2)) & (df_5m['close'].shift(1) > df_5m['open'].shift(1))
-        df_5m['fvg_bear'] = (df_5m['high'] < df_5m['low'].shift(2)) & (df_5m['close'].shift(1) < df_5m['open'].shift(1))
-        
-        last_5m = df_5m.iloc[-1]
-        price = last_5m['close']
-        high_volume = last_5m['volume'] > last_5m['vol_sma']
-
-        d_1h = "🟢" if trend_1h_up else "🔴"
-        d_15m = "🟢" if trend_15m_up else "🔴"
-        d_vol = "🔥" if high_volume else "❄️"
-        
-        debug_info = f"1H:{d_1h} | 15m:{d_15m} | Vol:{d_vol} | ATR: {current_atr:.4f}"
-
-        sqz_signal = "⏳ WAIT"
-        if trend_up and last_5m['sqz_fired'] and high_volume: sqz_signal = "🟢 BUY"
-        elif trend_down and last_5m['sqz_fired'] and high_volume: sqz_signal = "🔴 SELL"
-            
-        brk_signal = "⏳ WAIT"
-        if trend_up and last_5m['fvg_bull'] and high_volume: brk_signal = "🟢 BUY"
-        elif trend_down and last_5m['fvg_bear'] and high_volume: brk_signal = "🔴 SELL"
-            
-        return price, sqz_signal, brk_signal, debug_info, current_atr
+        bars = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+        df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df['ATR'] = ta.atr(df['high'], df['low'], df['close'], length=14)
+        return df
     except Exception as e:
-        return None, "Error", "Error", "Error", 0
+        return None
 
-col1, col2, col3 = st.columns([1, 1, 1.2])
+def analyze_smc(df):
+    """
+    دالة تحليل مدرسة الـ SMC (Breakout & FVG)
+    ترجع إشارة الشراء، سعر فجوة القيمة العادلة للأوامر المعلقة، وقيمة التذبذب
+    """
+    if df is None or len(df) < 3:
+        return 'NONE', 0.0, 0.0
 
+    last_close = df['close'].iloc[-1]
+    prev_high = df['high'].iloc[-2]
+    atr_value = df['ATR'].iloc[-1]
+    
+    is_breakout = last_close > prev_high 
+    # حساب منطقة FVG لتعليق الأوامر
+    fvg_price = df['low'].iloc[-1] + (df['high'].iloc[-1] - df['low'].iloc[-1]) * 0.5
+    
+    if is_breakout:
+        return 'BUY', fvg_price, atr_value
+    return 'NONE', 0.0, 0.0
+
+# ==========================================
+# 5. محرك التداول وعرض الشاشة
+# ==========================================
+st.subheader("📊 Live Market Scanner & Portfolio")
+
+# تقسيم الشاشة لعمودين (صفقات شغالة / أوامر معلقة)
+col1, col2 = st.columns(2)
 with col1:
-    st.header("💥 Breakout")
+    st.markdown("### 🟢 Active Trades")
+    for sym, trade in list(st.session_state.active_trades.items()):
+        # استخدام :.4f لعرض 4 أرقام عشرية بدقة تامة
+        with st.expander(f"{sym} | {trade['mode']} | Entry: ${trade['entry']:.4f}"):
+            st.write(f"**Mode:** {trade['mode']}")
+            st.write(f"**Entry Price:** ${trade['entry']:.4f}")
+            st.write(f"**🎯 Target 1:** ${trade['tp1']:.4f}")
+            st.write(f"**🚀 Target 2:** ${trade['tp2']:.4f}")
+            st.markdown(f"<span style='color:#ff4b4b'>**🛑 Stop Loss:** ${trade['sl']:.4f}</span>", unsafe_allow_html=True)
+            
+            # زر يدوي للحذف في حالة التحديثات
+            if st.button(f"Remove {sym}", key=f"remove_active_{sym}"):
+                del st.session_state.active_trades[sym]
+                st.rerun()
+
 with col2:
-    st.header("🗜️ Squeeze")
-with col3:
-    st.header("💼 Smart Portfolio")
+    st.markdown("### ⏳ Pending Orders (Pro Sniping)")
+    for sym, order in list(st.session_state.pending_orders.items()):
+        with st.expander(f"{sym} | {order['mode']} | Waiting at FVG: ${order['fvg_price']:.4f}"):
+            st.write(f"**Mode:** {order['mode']}")
+            st.write(f"**Net Waiting Price:** ${order['fvg_price']:.4f}")
+            
+            if st.button(f"Cancel {sym}", key=f"cancel_pending_{sym}"):
+                del st.session_state.pending_orders[sym]
+                st.rerun()
 
-for sym in symbols:
-    result = analyze_crypto(sym, trading_mode)
-    if result[0] is None:
+st.markdown("---")
+
+# ==========================================
+# 6. لوب فحص السوق واصطياد الفرص
+# ==========================================
+for symbol in SYMBOLS:
+    # تخطي العملة لو شغالة، معلقة، أو في فترة راحة
+    if symbol in st.session_state.active_trades or symbol in st.session_state.pending_orders:
         continue
-    price, sqz_signal, brk_signal, debug_info, current_atr = result
-        
-    mode_label = "🎯 Pro" if "Pro" in trading_mode else "🔥 Action"
-    clean_sym = sym.replace(':USDT','')
     
-    active_trades_count = len([t for t in portfolio if t.get('status', 'active') == 'active'])
+    if symbol in st.session_state.resting_symbols:
+        # فترة راحة 15 دقيقة (900 ثانية) بعد ضرب الستوب
+        if time.time() - st.session_state.resting_symbols[symbol] > 900:
+            del st.session_state.resting_symbols[symbol]
+        continue
+
+    # جلب البيانات
+    df_1h = fetch_data(symbol, '1h')
+    df_15m = fetch_data(symbol, '15m')
     
-    on_cooldown = False
-    if sym in cooldowns:
-        elapsed = datetime.now() - cooldowns[sym]
-        if elapsed < timedelta(minutes=COOLDOWN_MINUTES):
-            on_cooldown = True
-            rem_mins = COOLDOWN_MINUTES - int(elapsed.total_seconds() / 60)
-            debug_info += f" | ⏳ Resting: {rem_mins}m"
-    
-    if on_cooldown:
-        if "BUY" in brk_signal or "SELL" in brk_signal: brk_signal = "⏸️ BLOCKED (Cooldown)"
-        if "BUY" in sqz_signal or "SELL" in sqz_signal: sqz_signal = "⏸️ BLOCKED (Cooldown)"
-    elif active_trades_count >= max_open_trades and not any(t['symbol'] == sym and t.get('status') == 'active' for t in portfolio):
-        if "BUY" in brk_signal or "SELL" in brk_signal: brk_signal = "⏸️ BLOCKED (Max Trades)"
-        if "BUY" in sqz_signal or "SELL" in sqz_signal: sqz_signal = "⏸️ BLOCKED (Max Trades)"
-    else:
-        if "BUY" in brk_signal or "SELL" in brk_signal:
-            add_trade(sym, price, "Breakout/SMC", brk_signal, mode_label, current_atr)
-            active_trades_count += 1
+    # تحليل فريم الساعة والـ 15 دقيقة
+    signal_1h, fvg_price_1h, atr_1h = analyze_smc(df_1h)
+    signal_15m, _, atr_15m = analyze_smc(df_15m)
+
+    current_price = df_15m['close'].iloc[-1] if df_15m is not None else 0
+    if current_price == 0:
+        continue
+
+    # ----------------------------------------------------
+    # اتخاذ القرار (Pro يغلب لو الإشارة على فريم الساعة)
+    # ----------------------------------------------------
+    if signal_1h == 'BUY':
+        try:
+            # هنا يتم إرسال Limit Order حقيقي للمنصة مستقبلاً
+            st.session_state.pending_orders[symbol] = {
+                'fvg_price': fvg_price_1h,
+                'atr': atr_1h,
+                'mode': '🎯 Pro'
+            }
+        except Exception as e:
+            st.error(f"Error placing Pro order for {symbol}: {e}")
+
+    # لو مفيش إشارة قناص، ندور على إشارة الانفجار (Action)
+    elif signal_15m == 'BUY':
+        try:
+            # --- حل مشكلة خنقة الـ ATR للعملات الرخيصة (Minimum Threshold) ---
+            min_target_pct = 0.015  # الحد الأدنى للهدف 1.5%
             
-        if active_trades_count < max_open_trades:
-            if "BUY" in sqz_signal or "SELL" in sqz_signal:
-                add_trade(sym, price, "Squeeze", sqz_signal, mode_label, current_atr)
-                active_trades_count += 1
-        else:
-            if "BUY" in sqz_signal or "SELL" in sqz_signal:
-                sqz_signal = "⏸️ BLOCKED (Max Trades)"
-
-    with col1:
-        st.markdown(f"### {clean_sym}")
-        st.markdown(f"**💰 Price:** ${price}")
-        st.info(f"📊 {debug_info}") 
-        st.write(f"**Signal:** {brk_signal}")
-        if "BUY" in brk_signal or "SELL" in brk_signal: st.success("🤖 Auto-Running")
-        elif "Cooldown" in brk_signal: st.warning("⏳ Cooling Down")
-        elif "Max Trades" in brk_signal: st.error("🛑 Blocked (Portfolio Full)")
-        st.write("---")
-
-    with col2:
-        st.markdown(f"### {clean_sym}")
-        st.markdown(f"**💰 Price:** ${price}")
-        st.info(f"📊 {debug_info}") 
-        st.write(f"**Signal:** {sqz_signal}")
-        if "BUY" in sqz_signal or "SELL" in sqz_signal: st.success("🤖 Auto-Running")
-        elif "Cooldown" in sqz_signal: st.warning("⏳ Cooling Down")
-        elif "Max Trades" in sqz_signal: st.error("🛑 Blocked (Portfolio Full)")
-        st.write("---")
-
-with col3:
-    if len(portfolio) == 0:
-        st.info("No open trades currently. Waiting for signals...")
-    else:
-        for i, trade in enumerate(portfolio):
-            display_price = trade['entry_price'] 
+            # حساب الأهداف الافتراضية
+            tp1_dist = atr_15m * 1.5
+            tp2_dist = atr_15m * 3.0
+            sl_dist = atr_15m * 1.5
             
-            if trade.get('status', 'active') == 'active':
-                try:
-                    ticker = exchange.fetch_ticker(trade['symbol'])
-                    current_price = ticker['last']
-                    
-                    if not trade.get('tp1_executed', False):
-                        if "BUY" in trade['direction'] and current_price >= trade['tp1']:
-                            trade['tp1_executed'] = True
-                            trade['sl'] = trade['entry_price']  
-                            trade['sl_moved'] = True
-                            trade['realized_pnl'] = 0.5 * (((trade['tp1'] - trade['entry_price'])/trade['entry_price'])*100)
-                        elif "SELL" in trade['direction'] and current_price <= trade['tp1']:
-                            trade['tp1_executed'] = True
-                            trade['sl'] = trade['entry_price']
-                            trade['sl_moved'] = True
-                            trade['realized_pnl'] = 0.5 * (((trade['entry_price'] - trade['tp1'])/trade['entry_price'])*100)
-                    
-                    if "BUY" in trade['direction']:
-                        if current_price >= trade['tp2']:
-                            trade['status'] = 'hit_tp2'
-                            trade['exit_price'] = trade['tp2'] 
-                            cooldowns[trade['symbol']] = datetime.now()
-                            st.rerun() 
-                        elif current_price <= trade['sl']:
-                            trade['status'] = 'hit_sl'
-                            trade['exit_price'] = trade['sl']  
-                            cooldowns[trade['symbol']] = datetime.now()
-                            st.rerun()
-                    else:
-                        if current_price <= trade['tp2']:
-                            trade['status'] = 'hit_tp2'
-                            trade['exit_price'] = trade['tp2']
-                            cooldowns[trade['symbol']] = datetime.now()
-                            st.rerun()
-                        elif current_price >= trade['sl']:
-                            trade['status'] = 'hit_sl'
-                            trade['exit_price'] = trade['sl']
-                            cooldowns[trade['symbol']] = datetime.now()
-                            st.rerun()
-                            
-                    display_price = current_price if trade['status'] == 'active' else trade['exit_price']
-                except:
-                    display_price = trade['entry_price']
+            # لو الـ ATR ضعيف جداً والهدف أقرب من 1.5%، بنفرض الأهداف الإجبارية
+            if (tp1_dist / current_price) < min_target_pct:
+                tp1_price = current_price * (1 + min_target_pct)            # هدف أول إجباري 1.5%
+                tp2_price = current_price * (1 + (min_target_pct * 2.0))    # هدف تاني إجباري 3%
+                sl_price = current_price * (1 - min_target_pct)             # ستوب إجباري 1.5%
             else:
-                display_price = trade['exit_price']
-                
-            if trade['status'] == 'active':
-                if "BUY" in trade['direction']:
-                    unrealized_pnl = ((display_price - trade['entry_price']) / trade['entry_price']) * 100
-                else: 
-                    unrealized_pnl = ((trade['entry_price'] - display_price) / trade['entry_price']) * 100
-                
-                if trade.get('tp1_executed', False):
-                    pnl = trade.get('realized_pnl', 0.0) + (unrealized_pnl * 0.5)
-                else:
-                    pnl = unrealized_pnl
-            else:
-                # الحساب النهائي بعد إغلاق الصفقة
-                if "BUY" in trade['direction']:
-                    final_unrealized = ((trade['exit_price'] - trade['entry_price']) / trade['entry_price']) * 100
-                else:
-                    final_unrealized = ((trade['entry_price'] - trade['exit_price']) / trade['entry_price']) * 100
-                
-                if trade.get('tp1_executed', False):
-                    pnl = trade.get('realized_pnl', 0.0) + (final_unrealized * 0.5)
-                else:
-                    pnl = final_unrealized
+                tp1_price = current_price + tp1_dist
+                tp2_price = current_price + tp2_dist
+                sl_price = current_price - sl_dist
 
-            pnl_color = "green" if pnl > 0 else "red"
-            
-            if trade['status'] == 'hit_tp2':
-                title_status = f"🎉 Won ({pnl:.2f}%)"
-            elif trade['status'] == 'hit_sl':
-                title_status = f"🛡️ Break-even ({pnl:.2f}%)" if trade.get('sl_moved', False) else f"🛑 Lost ({pnl:.2f}%)"
-            else:
-                title_status = f"{pnl:.2f}% (Partial Active)" if trade.get('tp1_executed', False) else f"{pnl:.2f}%"
-                
-            strat_icon = "💥" if "Breakout" in trade['type'] else "🗜️"
-            expander_title = f"{trade['symbol'].replace(':USDT','')} | {trade['mode']} | {strat_icon} | {title_status}"
-            
-            with st.expander(expander_title, expanded=False):
-                st.write(f"**Mode:** {trade['mode']}")
-                st.write(f"**Strategy:** {trade['type']}")
-                st.write(f"**Direction:** {trade['direction']}")
-                st.write(f"**Entry Price:** ${trade['entry_price']}")
-                
-                # حساب نسبة الستوب لوز الديناميكية عشان تشوفيها بعينك
-                dyn_sl_pct = abs(trade['entry_price'] - trade['sl']) / trade['entry_price'] * 100
-                
-                if trade['status'] == 'active':
-                    st.markdown(f"**Live Price:** ${display_price}")
-                else:
-                    st.markdown(f"**Exit Price:** ${display_price}")
-                    
-                st.markdown(f"**Total PnL:** <span style='color:{pnl_color}; font-size:18px;'><b>{pnl:.2f}%</b></span>", unsafe_allow_html=True)
-                
-                if trade.get('tp1_executed', False):
-                    st.success("✨ **Partial TP 1 Executed!** (50% profit secured in cash)")
-
-                if trade['status'] == 'hit_tp2':
-                    st.success("🎉 **Status: Hit Target 2 (Full Win)**")
-                elif trade['status'] == 'hit_sl':
-                    if trade.get('sl_moved', False):
-                        st.warning("🛡️ **Status: Closed at Entry (Secured First Target Profit)**")
-                    else:
-                        st.error("🛑 **Status: Hit Stop Loss**")
-                else:
-                    st.info(f"📏 **Dynamic Risk (ATR):** SL is ~{dyn_sl_pct:.2f}% away from entry")
-                    st.write(f"🎯 **Target 1:** ${trade['tp1']:.2f}")
-                    st.write(f"🚀 **Target 2:** ${trade['tp2']:.2f}")
-                    if trade.get('sl_moved', False):
-                        st.success(f"✅ Trade Secured! (Remaining SL = Entry: ${trade['sl']:.2f})")
-                    else:
-                        st.warning(f"🛑 **Stop Loss:** ${trade['sl']:.2f}")
-                    
-                if st.button("❌ Remove Trade", key=f"close_{i}"):
-                    close_trade(i)
-                    st.rerun()
+            # تسجيل الصفقة في الشاشة (وهنا يتم وضع Market Order لاحقاً)
+            st.session_state.active_trades[symbol] = {
+                'entry': current_price,
+                'tp1': tp1_price,
+                'tp2': tp2_price,
+                'sl': sl_price,
+                'mode': '🔥 Action'
+            }
+        except Exception as e:
+            st.error(f"Error placing Action order for {symbol}: {e}")
