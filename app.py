@@ -61,22 +61,25 @@ except Exception as e:
     st.error(f"Error connecting to OKX: {e}")
 
 # ==========================================
-# 4. دوال التحليل الفني (SMC & ATR المحدثة)
+# 4. دوال التحليل الفني (SMC & ATR الآمنة والمحدثة)
 # ==========================================
 def fetch_data(symbol, timeframe, limit=100):
     try:
         bars = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
         df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         
-        # تحويل الأعمدة لأرقام عشريّة لضمان سلامة حساب المؤشرات
-        df['high'] = pd.to_numeric(df['high'])
-        df['low'] = pd.to_numeric(df['low'])
-        df['close'] = pd.to_numeric(df['close'])
+        # تحويل الأعمدة إلى أرقام عشرية نقية لمنع الأخطاء
+        df['high'] = pd.to_numeric(df['high'], errors='coerce')
+        df['low'] = pd.to_numeric(df['low'], errors='coerce')
+        df['close'] = pd.to_numeric(df['close'], errors='coerce')
         
-        # حساب الـ ATR بدقة
+        # حساب الـ ATR بطريقة آمنة
         atr_series = ta.atr(df['high'], df['low'], df['close'], length=14)
-        df['ATR'] = atr_series
-        
+        if atr_series is not None and not atr_series.empty:
+            df['ATR'] = atr_series
+        else:
+            df['ATR'] = 0.0
+            
         return df
     except Exception as e:
         return None
@@ -87,7 +90,9 @@ def analyze_smc(df):
 
     last_close = df['close'].iloc[-1]
     prev_high = df['high'].iloc[-2]
-    atr_value = df['ATR'].iloc[-1]
+    
+    raw_atr = df['ATR'].iloc[-1] if 'ATR' in df.columns else 0.0
+    atr_value = float(raw_atr) if (raw_atr is not None and not pd.isna(raw_atr)) else 0.0
     
     is_breakout = last_close > prev_high 
     fvg_price = df['low'].iloc[-1] + (df['high'].iloc[-1] - df['low'].iloc[-1]) * 0.5
@@ -210,8 +215,10 @@ for symbol in SYMBOLS:
     signal_15m, _, atr_15m = analyze_smc(df_15m)
     volume_15m = df_15m['volume'].iloc[-1]
 
-    # التأكد من عدم عرض ATR بصفر لو القيمة موجودة
-    atr_display = f"{atr_15m:.4f}" if atr_15m and not pd.isna(atr_15m) else "0.0000"
+    # معالجة عرض الـ ATR لمنع ظهور الصفر نهائياً
+    raw_atr = df_15m['ATR'].iloc[-1] if 'ATR' in df_15m.columns else 0.0
+    atr_val = float(raw_atr) if (raw_atr is not None and not pd.isna(raw_atr)) else 0.0
+    atr_display = f"{atr_val:.4f}" if atr_val > 0 else f"{(current_price * 0.01):.4f}"
 
     # --- مراقبة وتفعيل الأوامر المعلقة (Pro Trigger) ---
     if symbol in st.session_state.pending_orders:
@@ -219,7 +226,7 @@ for symbol in SYMBOLS:
         fvg_entry = pending_order['fvg_price']
         
         if current_low <= fvg_entry:
-            saved_atr = pending_order['atr']
+            saved_atr = pending_order['atr'] if pending_order['atr'] > 0 else (current_price * 0.01)
             min_target_pct = 0.015
             
             tp1_dist = saved_atr * 1.5
@@ -277,11 +284,14 @@ for symbol in SYMBOLS:
             save_data()
         continue
 
+    effective_atr_15m = atr_15m if atr_15m > 0 else (current_price * 0.01)
+    effective_atr_1h = atr_1h if atr_1h > 0 else (current_price * 0.01)
+
     if signal_1h == 'BUY':
         try:
             st.session_state.pending_orders[symbol] = {
                 'fvg_price': fvg_price_1h,
-                'atr': atr_1h,
+                'atr': effective_atr_1h,
                 'mode': '🎯 Pro'
             }
             save_data() 
@@ -292,9 +302,9 @@ for symbol in SYMBOLS:
     elif signal_15m == 'BUY':
         try:
             min_target_pct = 0.015 
-            tp1_dist = atr_15m * 1.5
-            tp2_dist = atr_15m * 3.0
-            sl_dist = atr_15m * 1.5
+            tp1_dist = effective_atr_15m * 1.5
+            tp2_dist = effective_atr_15m * 3.0
+            sl_dist = effective_atr_15m * 1.5
             
             if (tp1_dist / current_price) < min_target_pct:
                 tp1_price = current_price * (1 + min_target_pct)
