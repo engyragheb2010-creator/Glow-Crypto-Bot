@@ -1,4 +1,4 @@
- import streamlit as st
+import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 import ccxt
 import pandas as pd
