@@ -61,13 +61,22 @@ except Exception as e:
     st.error(f"Error connecting to OKX: {e}")
 
 # ==========================================
-# 4. دوال التحليل الفني (SMC & ATR)
+# 4. دوال التحليل الفني (SMC & ATR المحدثة)
 # ==========================================
 def fetch_data(symbol, timeframe, limit=100):
     try:
         bars = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
         df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        df['ATR'] = ta.atr(df['high'], df['low'], df['close'], length=14)
+        
+        # تحويل الأعمدة لأرقام عشريّة لضمان سلامة حساب المؤشرات
+        df['high'] = pd.to_numeric(df['high'])
+        df['low'] = pd.to_numeric(df['low'])
+        df['close'] = pd.to_numeric(df['close'])
+        
+        # حساب الـ ATR بدقة
+        atr_series = ta.atr(df['high'], df['low'], df['close'], length=14)
+        df['ATR'] = atr_series
+        
         return df
     except Exception as e:
         return None
@@ -121,7 +130,6 @@ with col1:
 
         status_msg = ""
         
-        # المنطق المحدث: جني الأرباح عند الهدف الأول وتأمين الباقي
         if live_price >= trade['tp2'] and pnl_pct > 0:
             trade['tp2_hit'] = True
             trade['tp1_hit'] = True
@@ -130,11 +138,10 @@ with col1:
             status_msg = "🚀 **مبروك! تم ضرب الهدف الثاني (Target 2) وإغلاق الصفقة بالكامل بربح كلي!**"
         elif live_price >= trade['tp1'] and pnl_pct > 0:
             if not trade.get('tp1_hit', False):
-                # حساب مكسب التارجت الأول (افتراض بيع 50% من الكمية عند التارجت الأول)
                 tp1_gain_pct = ((trade['tp1'] - trade['entry']) / trade['entry']) * 100
-                st.session_state.realized_pnl += (tp1_gain_pct * 0.5) # إضافة الربح المحقق
+                st.session_state.realized_pnl += (tp1_gain_pct * 0.5) 
                 trade['tp1_hit'] = True
-                trade['sl'] = trade['entry']  # نقل الوقف لنقطة الدخول للباقي
+                trade['sl'] = trade['entry']  
                 save_data()
             status_msg = "🎯 **رائع! تم ضرب الهدف الأول (Target 1)، وتم أخذ جزء من الأرباح وتأمين الباقي عند نقطة الدخول (Break-even).**"
         else:
@@ -203,6 +210,9 @@ for symbol in SYMBOLS:
     signal_15m, _, atr_15m = analyze_smc(df_15m)
     volume_15m = df_15m['volume'].iloc[-1]
 
+    # التأكد من عدم عرض ATR بصفر لو القيمة موجودة
+    atr_display = f"{atr_15m:.4f}" if atr_15m and not pd.isna(atr_15m) else "0.0000"
+
     # --- مراقبة وتفعيل الأوامر المعلقة (Pro Trigger) ---
     if symbol in st.session_state.pending_orders:
         pending_order = st.session_state.pending_orders[symbol]
@@ -252,7 +262,7 @@ for symbol in SYMBOLS:
     market_radar_data.append({
         "🪙 Symbol": symbol,
         "💵 Price": f"${current_price:.4f}",
-        "📏 15m ATR": f"{atr_15m:.4f}",
+        "📏 15m ATR": atr_display,
         "📊 Volume": f"{volume_15m:.1f}",
         "Status": status
     })
