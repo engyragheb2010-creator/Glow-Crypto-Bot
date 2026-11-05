@@ -11,7 +11,7 @@ import os
 # 1. إعدادات الشاشة الأساسية والتحديث التلقائي (كل 15 ثانية)
 # ==========================================
 st.set_page_config(page_title="SMC Sniper Bot", layout="wide")
-st.title("🤖 SMC Sniper Bot - Paper Trading Simulator (Buy & Sell)")
+st.title("🤖 SMC Sniper Bot - Paper Trading Simulator (Manual Removal Only)")
 
 st_autorefresh(interval=15000, limit=None, key="auto_refresh")
 
@@ -65,7 +65,7 @@ except Exception as e:
     st.error(f"Error connecting to OKX: {e}")
 
 # ==========================================
-# 4. دوال التحليل الفني (SMC & ATR الشاملة لشراء وبيع)
+# 4. دوال التحليل الفني (SMC & ATR)
 # ==========================================
 def fetch_data(symbol, timeframe, limit=100):
     try:
@@ -97,12 +97,9 @@ def analyze_smc(df):
     raw_atr = df['ATR'].iloc[-1] if 'ATR' in df.columns else 0.0
     atr_value = float(raw_atr) if (raw_atr is not None and not pd.isna(raw_atr)) else 0.0
     
-    # شروط الشراء (Breakout للأعلى)
     if last_close > prev_high:
         fvg_price = df['low'].iloc[-1] + (df['high'].iloc[-1] - df['low'].iloc[-1]) * 0.5
         return 'BUY', fvg_price, atr_value
-    
-    # شروط البيع (Breakout للأسفل)
     elif last_close < prev_low:
         fvg_price = df['low'].iloc[-1] + (df['high'].iloc[-1] - df['low'].iloc[-1]) * 0.5
         return 'SELL', fvg_price, atr_value
@@ -115,13 +112,13 @@ def analyze_smc(df):
 st.sidebar.metric(label="💰 Realized Profits (Closed/TP1)", value=f"${st.session_state.realized_pnl:.2f}")
 
 # ==========================================
-# 5. محرك التداول وإدارة الأهداف وجني الأرباح الجزئي
+# 5. محرك التداول وإدارة الأهداف (بدون حذف تلقائي)
 # ==========================================
-st.subheader("📊 Live Market Scanner & Portfolio (Buy & Sell)")
+st.subheader("📊 Live Market Scanner & Portfolio (Manual Control)")
 col1, col2 = st.columns(2)
 
 with col1:
-    st.markdown("### 🟢 Active Trades")
+    st.markdown("### 🟢 Active Trades (Persistent)")
     if not st.session_state.active_trades:
         st.info("No active trades yet. Waiting for breakouts or pending triggers...")
         
@@ -133,7 +130,7 @@ with col1:
             side = trade.get('side', 'BUY')
             if side == 'BUY':
                 pnl_pct = ((live_price - trade['entry']) / trade['entry']) * 100
-            else: # SELL
+            else: 
                 pnl_pct = ((trade['entry'] - live_price) / trade['entry']) * 100
                 
             pnl_color = "#00ff00" if pnl_pct >= 0 else "#ff4b4b"
@@ -150,20 +147,20 @@ with col1:
         side_badge = "🟢 BUY" if side == 'BUY' else "🔴 SELL"
         status_msg = ""
         
-        # إدارة الأهداف حسب نوع الصفقة (شراء أو بيع)
         if side == 'BUY':
             tp2_reached = live_price >= trade['tp2']
             tp1_reached = live_price >= trade['tp1']
-        else: # SELL (الأهداف بتكون أقل من سعر الدخول)
+        else: 
             tp2_reached = live_price <= trade['tp2']
             tp1_reached = live_price <= trade['tp1']
 
+        # رصد الأهداف وتحديث الحالة والباقي يظل ظاهراً ولا يتم الحذف أبداً إلا بضغط المستخدم
         if tp2_reached and pnl_pct > 0:
             trade['tp2_hit'] = True
             trade['tp1_hit'] = True
             trade['sl'] = trade['entry']
             save_data()
-            status_msg = f"🚀 **مبروك! تم ضرب الهدف الثاني (Target 2) لصفقة الـ {side} وإغلاقها بربح كلي!**"
+            status_msg = f"🚀 **تم ضرب الهدف الثاني (Target 2) لصفقة الـ {side}! الصفقة مستمرة ومثبتة حتى تقوم بحذفها بنفسك.**"
         elif tp1_reached and pnl_pct > 0:
             if not trade.get('tp1_hit', False):
                 tp1_gain_pct = abs((trade['tp1'] - trade['entry']) / trade['entry']) * 100
@@ -171,7 +168,7 @@ with col1:
                 trade['tp1_hit'] = True
                 trade['sl'] = trade['entry']  
                 save_data()
-            status_msg = f"🎯 **رائع! تم ضرب الهدف الأول (Target 1) لصفقة الـ {side}، وتم أخذ جزء من الأرباح وتأمين الباقي عند نقطة الدخول (Break-even).**"
+            status_msg = f"🎯 **تم ضرب الهدف الأول (Target 1) لصفقة الـ {side}، وتم أخذ الأرباح وتأمين الصفقة. مستمرة لحين حذفها يدويّاً.**"
         else:
             if not trade.get('tp1_hit', False):
                 trade['tp1_hit'] = False
@@ -194,7 +191,8 @@ with col1:
             """, unsafe_allow_html=True)
             
             st.markdown("---")
-            if st.button(f"Remove {sym}", key=f"remove_active_{sym}"):
+            # زر الحذف اليدوي الوحيد
+            if st.button(f"Remove {sym} (Manual)", key=f"remove_active_{sym}"):
                 del st.session_state.active_trades[sym]
                 save_data()  
                 st.rerun()
@@ -222,7 +220,7 @@ with col2:
 st.markdown("---")
 
 # ==========================================
-# 6. رادار السوق ولوب فحص الفرص لشراء وبيع
+# 6. رادار السوق ولوب فحص الفرص
 # ==========================================
 st.markdown("### 📡 Market Radar (Live Scanner)")
 market_radar_data = []
@@ -246,7 +244,6 @@ for symbol in SYMBOLS:
     atr_val = float(raw_atr) if (raw_atr is not None and not pd.isna(raw_atr)) else 0.0
     atr_display = f"{atr_val:.4f}" if atr_val > 0 else f"{(current_price * 0.01):.4f}"
 
-    # تفعيل الأوامر المعلقة
     if symbol in st.session_state.pending_orders:
         pending_order = st.session_state.pending_orders[symbol]
         fvg_entry = pending_order['fvg_price']
@@ -311,7 +308,6 @@ for symbol in SYMBOLS:
     effective_atr_15m = atr_15m if atr_15m > 0 else (current_price * 0.01)
     effective_atr_1h = atr_1h if atr_1h > 0 else (current_price * 0.01)
 
-    # التقاط إشارات الفريم الكبير (1h) كأوامر معلقة Pro
     if signal_1h in ['BUY', 'SELL']:
         try:
             st.session_state.pending_orders[symbol] = {
@@ -325,7 +321,6 @@ for symbol in SYMBOLS:
         except Exception as e:
             st.error(f"Error placing Pro order for {symbol}: {e}")
 
-    # التقاط إشارات الفريم اللحظي (15m) كصفقات مباشرة Action
     elif signal_15m in ['BUY', 'SELL']:
         try:
             min_target_pct = 0.015 
@@ -335,7 +330,7 @@ for symbol in SYMBOLS:
                 tp1_price = current_price + max(effective_atr_15m * 1.5, current_price * min_target_pct)
                 tp2_price = current_price + max(effective_atr_15m * 3.0, current_price * (min_target_pct * 2))
                 sl_price = current_price - effective_atr_15m * 1.5
-            else: # SELL
+            else: 
                 tp1_price = current_price - max(effective_atr_15m * 1.5, current_price * min_target_pct)
                 tp2_price = current_price - max(effective_atr_15m * 3.0, current_price * (min_target_pct * 2))
                 sl_price = current_price + effective_atr_15m * 1.5
