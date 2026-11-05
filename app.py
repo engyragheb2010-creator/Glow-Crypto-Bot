@@ -11,7 +11,7 @@ import os
 # 1. إعدادات الشاشة الأساسية والتحديث التلقائي (كل 15 ثانية)
 # ==========================================
 st.set_page_config(page_title="SMC Sniper Bot", layout="wide")
-st.title("🤖 SMC Sniper Bot - Paper Trading Simulator")
+st.title("🤖 SMC Sniper Bot - Paper Trading Simulator (Buy & Sell)")
 
 st_autorefresh(interval=15000, limit=None, key="auto_refresh")
 
@@ -65,7 +65,7 @@ except Exception as e:
     st.error(f"Error connecting to OKX: {e}")
 
 # ==========================================
-# 4. دوال التحليل الفني (SMC & ATR الآمنة)
+# 4. دوال التحليل الفني (SMC & ATR الشاملة لشراء وبيع)
 # ==========================================
 def fetch_data(symbol, timeframe, limit=100):
     try:
@@ -92,15 +92,21 @@ def analyze_smc(df):
 
     last_close = df['close'].iloc[-1]
     prev_high = df['high'].iloc[-2]
+    prev_low = df['low'].iloc[-2]
     
     raw_atr = df['ATR'].iloc[-1] if 'ATR' in df.columns else 0.0
     atr_value = float(raw_atr) if (raw_atr is not None and not pd.isna(raw_atr)) else 0.0
     
-    is_breakout = last_close > prev_high 
-    fvg_price = df['low'].iloc[-1] + (df['high'].iloc[-1] - df['low'].iloc[-1]) * 0.5
-    
-    if is_breakout:
+    # شروط الشراء (Breakout للأعلى)
+    if last_close > prev_high:
+        fvg_price = df['low'].iloc[-1] + (df['high'].iloc[-1] - df['low'].iloc[-1]) * 0.5
         return 'BUY', fvg_price, atr_value
+    
+    # شروط البيع (Breakout للأسفل)
+    elif last_close < prev_low:
+        fvg_price = df['low'].iloc[-1] + (df['high'].iloc[-1] - df['low'].iloc[-1]) * 0.5
+        return 'SELL', fvg_price, atr_value
+        
     return 'NONE', 0.0, 0.0
 
 # ==========================================
@@ -111,7 +117,7 @@ st.sidebar.metric(label="💰 Realized Profits (Closed/TP1)", value=f"${st.sessi
 # ==========================================
 # 5. محرك التداول وإدارة الأهداف وجني الأرباح الجزئي
 # ==========================================
-st.subheader("📊 Live Market Scanner & Portfolio")
+st.subheader("📊 Live Market Scanner & Portfolio (Buy & Sell)")
 col1, col2 = st.columns(2)
 
 with col1:
@@ -124,44 +130,60 @@ with col1:
             ticker = exchange.fetch_ticker(sym)
             live_price = ticker['last']
             
-            pnl_pct = ((live_price - trade['entry']) / trade['entry']) * 100
+            side = trade.get('side', 'BUY')
+            if side == 'BUY':
+                pnl_pct = ((live_price - trade['entry']) / trade['entry']) * 100
+            else: # SELL
+                pnl_pct = ((trade['entry'] - live_price) / trade['entry']) * 100
+                
             pnl_color = "#00ff00" if pnl_pct >= 0 else "#ff4b4b"
             pnl_text = f"<span style='color:{pnl_color}'><b>{pnl_pct:.2f}%</b></span>"
         except:
             live_price = trade['entry']
             pnl_pct = 0.0
             pnl_text = "Loading..."
+            side = trade.get('side', 'BUY')
 
         if 'original_sl' not in trade:
             trade['original_sl'] = trade['sl']
 
+        side_badge = "🟢 BUY" if side == 'BUY' else "🔴 SELL"
         status_msg = ""
         
-        if live_price >= trade['tp2'] and pnl_pct > 0:
+        # إدارة الأهداف حسب نوع الصفقة (شراء أو بيع)
+        if side == 'BUY':
+            tp2_reached = live_price >= trade['tp2']
+            tp1_reached = live_price >= trade['tp1']
+        else: # SELL (الأهداف بتكون أقل من سعر الدخول)
+            tp2_reached = live_price <= trade['tp2']
+            tp1_reached = live_price <= trade['tp1']
+
+        if tp2_reached and pnl_pct > 0:
             trade['tp2_hit'] = True
             trade['tp1_hit'] = True
             trade['sl'] = trade['entry']
             save_data()
-            status_msg = "🚀 **مبروك! تم ضرب الهدف الثاني (Target 2) وإغلاق الصفقة بالكامل بربح كلي!**"
-        elif live_price >= trade['tp1'] and pnl_pct > 0:
+            status_msg = f"🚀 **مبروك! تم ضرب الهدف الثاني (Target 2) لصفقة الـ {side} وإغلاقها بربح كلي!**"
+        elif tp1_reached and pnl_pct > 0:
             if not trade.get('tp1_hit', False):
-                tp1_gain_pct = ((trade['tp1'] - trade['entry']) / trade['entry']) * 100
+                tp1_gain_pct = abs((trade['tp1'] - trade['entry']) / trade['entry']) * 100
                 st.session_state.realized_pnl += (tp1_gain_pct * 0.5) 
                 trade['tp1_hit'] = True
                 trade['sl'] = trade['entry']  
                 save_data()
-            status_msg = "🎯 **رائع! تم ضرب الهدف الأول (Target 1)، وتم أخذ جزء من الأرباح وتأمين الباقي عند نقطة الدخول (Break-even).**"
+            status_msg = f"🎯 **رائع! تم ضرب الهدف الأول (Target 1) لصفقة الـ {side}، وتم أخذ جزء من الأرباح وتأمين الباقي عند نقطة الدخول (Break-even).**"
         else:
             if not trade.get('tp1_hit', False):
                 trade['tp1_hit'] = False
                 trade['tp2_hit'] = False
                 trade['sl'] = trade['original_sl']
 
-        with st.expander(f"{sym} | {trade['mode']} | PnL: {pnl_pct:.2f}%", expanded=True):
+        with st.expander(f"{sym} | {side_badge} | {trade['mode']} | PnL: {pnl_pct:.2f}%", expanded=True):
             if status_msg:
                 st.success(status_msg)
                 
             st.markdown(f"""
+            - **Type / Side:** {side_badge}
             - **Mode:** {trade['mode']}
             - **Entry Price:** ${trade['entry']:.4f}
             - **Live Price:** ${live_price:.4f}
@@ -180,11 +202,13 @@ with col1:
 with col2:
     st.markdown("### ⏳ Pending Orders (Pro Sniping)")
     if not st.session_state.pending_orders:
-        st.info("No pending orders. Scanning 1h timeframe...")
+        st.info("No pending orders. Scanning timeframes...")
         
     for sym, order in list(st.session_state.pending_orders.items()):
-        with st.expander(f"{sym} | {order['mode']} | Waiting at Fvg: ${order['fvg_price']:.4f}", expanded=True):
+        side_badge = "🟢 BUY" if order.get('side', 'BUY') == 'BUY' else "🔴 SELL"
+        with st.expander(f"{sym} | {side_badge} | {order['mode']} | Waiting at Fvg: ${order['fvg_price']:.4f}", expanded=True):
             st.markdown(f"""
+            - **Type / Side:** {side_badge}
             - **Mode:** {order['mode']}
             - **Net Waiting Price:** ${order['fvg_price']:.4f}
             """, unsafe_allow_html=True)
@@ -198,7 +222,7 @@ with col2:
 st.markdown("---")
 
 # ==========================================
-# 6. رادار السوق ولوب فحص الفرص
+# 6. رادار السوق ولوب فحص الفرص لشراء وبيع
 # ==========================================
 st.markdown("### 📡 Market Radar (Live Scanner)")
 market_radar_data = []
@@ -211,6 +235,7 @@ for symbol in SYMBOLS:
         continue
         
     current_price = df_15m['close'].iloc[-1]
+    current_high = df_15m['high'].iloc[-1]
     current_low = df_15m['low'].iloc[-1]  
     
     signal_1h, fvg_price_1h, atr_1h = analyze_smc(df_1h)
@@ -221,27 +246,27 @@ for symbol in SYMBOLS:
     atr_val = float(raw_atr) if (raw_atr is not None and not pd.isna(raw_atr)) else 0.0
     atr_display = f"{atr_val:.4f}" if atr_val > 0 else f"{(current_price * 0.01):.4f}"
 
+    # تفعيل الأوامر المعلقة
     if symbol in st.session_state.pending_orders:
         pending_order = st.session_state.pending_orders[symbol]
         fvg_entry = pending_order['fvg_price']
+        side = pending_order.get('side', 'BUY')
+        saved_atr = pending_order['atr'] if pending_order['atr'] > 0 else (current_price * 0.01)
+        min_target_pct = 0.015
         
-        if current_low <= fvg_entry:
-            saved_atr = pending_order['atr'] if pending_order['atr'] > 0 else (current_price * 0.01)
-            min_target_pct = 0.015
-            
-            tp1_dist = saved_atr * 1.5
-            tp2_dist = saved_atr * 3.0
-            sl_dist = saved_atr * 1.5
-            
-            if (tp1_dist / fvg_entry) < min_target_pct:
-                tp1_price = fvg_entry * (1 + min_target_pct)
-                tp2_price = fvg_entry * (1 + (min_target_pct * 2.0))
-                sl_price = fvg_entry * (1 - min_target_pct)
-            else:
-                tp1_price = fvg_entry + tp1_dist
-                tp2_price = fvg_entry + tp2_dist
-                sl_price = fvg_entry - sl_dist
+        triggered = False
+        if side == 'BUY' and current_low <= fvg_entry:
+            triggered = True
+            tp1_price = fvg_entry + max(saved_atr * 1.5, fvg_entry * min_target_pct)
+            tp2_price = fvg_entry + max(saved_atr * 3.0, fvg_entry * (min_target_pct * 2))
+            sl_price = fvg_entry - saved_atr * 1.5
+        elif side == 'SELL' and current_high >= fvg_entry:
+            triggered = True
+            tp1_price = fvg_entry - max(saved_atr * 1.5, fvg_entry * min_target_pct)
+            tp2_price = fvg_entry - max(saved_atr * 3.0, fvg_entry * (min_target_pct * 2))
+            sl_price = fvg_entry + saved_atr * 1.5
 
+        if triggered:
             st.session_state.active_trades[symbol] = {
                 'entry': fvg_entry,
                 'tp1': tp1_price,
@@ -249,6 +274,7 @@ for symbol in SYMBOLS:
                 'sl': sl_price,
                 'original_sl': sl_price,
                 'mode': '🎯 Pro (Triggered)',
+                'side': side,
                 'tp1_hit': False,
                 'tp2_hit': False
             }
@@ -285,33 +311,34 @@ for symbol in SYMBOLS:
     effective_atr_15m = atr_15m if atr_15m > 0 else (current_price * 0.01)
     effective_atr_1h = atr_1h if atr_1h > 0 else (current_price * 0.01)
 
-    if signal_1h == 'BUY':
+    # التقاط إشارات الفريم الكبير (1h) كأوامر معلقة Pro
+    if signal_1h in ['BUY', 'SELL']:
         try:
             st.session_state.pending_orders[symbol] = {
                 'fvg_price': fvg_price_1h,
                 'atr': effective_atr_1h,
-                'mode': '🎯 Pro'
+                'mode': '🎯 Pro',
+                'side': signal_1h
             }
             save_data() 
             st.rerun()
         except Exception as e:
             st.error(f"Error placing Pro order for {symbol}: {e}")
 
-    elif signal_15m == 'BUY':
+    # التقاط إشارات الفريم اللحظي (15m) كصفقات مباشرة Action
+    elif signal_15m in ['BUY', 'SELL']:
         try:
             min_target_pct = 0.015 
-            tp1_dist = effective_atr_15m * 1.5
-            tp2_dist = effective_atr_15m * 3.0
-            sl_dist = effective_atr_15m * 1.5
+            side = signal_15m
             
-            if (tp1_dist / current_price) < min_target_pct:
-                tp1_price = current_price * (1 + min_target_pct)
-                tp2_price = current_price * (1 + (min_target_pct * 2.0))
-                sl_price = current_price * (1 - min_target_pct)
-            else:
-                tp1_price = current_price + tp1_dist
-                tp2_price = current_price + tp2_dist
-                sl_price = current_price - sl_dist
+            if side == 'BUY':
+                tp1_price = current_price + max(effective_atr_15m * 1.5, current_price * min_target_pct)
+                tp2_price = current_price + max(effective_atr_15m * 3.0, current_price * (min_target_pct * 2))
+                sl_price = current_price - effective_atr_15m * 1.5
+            else: # SELL
+                tp1_price = current_price - max(effective_atr_15m * 1.5, current_price * min_target_pct)
+                tp2_price = current_price - max(effective_atr_15m * 3.0, current_price * (min_target_pct * 2))
+                sl_price = current_price + effective_atr_15m * 1.5
 
             st.session_state.active_trades[symbol] = {
                 'entry': current_price,
@@ -320,6 +347,7 @@ for symbol in SYMBOLS:
                 'sl': sl_price,
                 'original_sl': sl_price,
                 'mode': '🔥 Action',
+                'side': side,
                 'tp1_hit': False,
                 'tp2_hit': False
             }
