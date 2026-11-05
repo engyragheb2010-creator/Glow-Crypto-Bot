@@ -4,12 +4,14 @@ import ccxt
 import pandas as pd
 import pandas_ta as ta
 import time
+import json
+import os
 
 # ==========================================
 # 1. إعدادات الشاشة الأساسية والتحديث التلقائي
 # ==========================================
 st.set_page_config(page_title="SMC Sniper Bot", layout="wide")
-st.title("🤖 SMC Sniper Bot - Paper Trading Simulator (Memory Mode)")
+st.title("🤖 SMC Sniper Bot - Paper Trading Simulator (Secure Storage)")
 
 st_autorefresh(interval=15000, limit=None, key="auto_refresh")
 
@@ -17,18 +19,38 @@ if st.button("🔄 Force Update Price / Refresh Now"):
     st.rerun()
 
 # ==========================================
-# 2. إعدادات الذاكرة الداخلية للبوت (Session State)
+# 2. إعدادات الذاكرة الدائمة الآمنة (JSON)
 # ==========================================
 SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'LINK/USDT', 'NEAR/USDT', 'SUI/USDT', 'AVAX/USDT', 'ADA/USDT', 'XRP/USDT']
+DATA_FILE = 'trades_data.json'
 
-if 'active_trades' not in st.session_state:
-    st.session_state.active_trades = {}
-if 'pending_orders' not in st.session_state:
-    st.session_state.pending_orders = {}
-if 'resting_symbols' not in st.session_state:
-    st.session_state.resting_symbols = {}
-if 'realized_pnl' not in st.session_state:
-    st.session_state.realized_pnl = 0.0
+def load_data():
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except:
+            return {'active_trades': {}, 'pending_orders': {}, 'realized_pnl': 0.0}
+    return {'active_trades': {}, 'pending_orders': {}, 'realized_pnl': 0.0}
+
+def save_data():
+    data = {
+        'active_trades': st.session_state.active_trades,
+        'pending_orders': st.session_state.pending_orders,
+        'realized_pnl': st.session_state.realized_pnl
+    }
+    try:
+        with open(DATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        st.error(f"Save error: {e}")
+
+if 'data_loaded' not in st.session_state:
+    saved_data = load_data()
+    st.session_state.active_trades = saved_data.get('active_trades', {})
+    st.session_state.pending_orders = saved_data.get('pending_orders', {})
+    st.session_state.realized_pnl = saved_data.get('realized_pnl', 0.0)
+    st.session_state.data_loaded = True
 
 # ==========================================
 # 3. الاتصال بمنصة OKX (للقراءة فقط)
@@ -91,7 +113,7 @@ st.sidebar.metric(label="💰 Realized Profits (Closed/TP1)", value=f"${st.sessi
 # ==========================================
 # 5. محرك التداول وإدارة الأهداف (حذف يدوي فقط)
 # ==========================================
-st.subheader("📊 Live Market Scanner & Portfolio (Memory Active)")
+st.subheader("📊 Live Market Scanner & Portfolio (Secure Persistent)")
 col1, col2 = st.columns(2)
 
 with col1:
@@ -138,14 +160,16 @@ with col1:
                 trade['tp2_hit'] = True
                 trade['tp1_hit'] = True
                 trade['sl'] = trade['entry']
-            status_msg = f"🚀 **تم ضرب الهدف الثاني (Target 2) لصفقة الـ {side} وإضافة باقي الأرباح للمحفظة! مستمرة لحين حذفها.**"
+                save_data()
+            status_msg = f"🚀 **تم ضرب الهدف الثاني (Target 2) لصفقة الـ {side} وإضافة باقي الأرباح للمحفظة وحفظها!**"
         elif tp1_reached and pnl_pct > 0:
             if not trade.get('tp1_hit', False):
                 tp1_gain_pct = abs((trade['tp1'] - trade['entry']) / trade['entry']) * 100
                 st.session_state.realized_pnl += (tp1_gain_pct * 0.5) 
                 trade['tp1_hit'] = True
                 trade['sl'] = trade['entry']  
-            status_msg = f"🎯 **تم ضرب الهدف الأول (Target 1) لصفقة الـ {side}، وتم أخذ الأرباح وتأمين الصفقة. مستمرة لحين حذفها يدويّاً.**"
+                save_data()
+            status_msg = f"🎯 **تم ضرب الهدف الأول (Target 1) لصفقة الـ {side}، وتأمين الصفقة وحفظ البيانات بدقة.**"
         else:
             if not trade.get('tp1_hit', False):
                 trade['tp1_hit'] = False
@@ -170,6 +194,7 @@ with col1:
             st.markdown("---")
             if st.button(f"Remove {sym} (Manual)", key=f"remove_active_{sym}"):
                 del st.session_state.active_trades[sym]
+                save_data()
                 st.rerun()
 
 with col2:
@@ -189,6 +214,7 @@ with col2:
             st.markdown("---")
             if st.button(f"Cancel {sym}", key=f"cancel_pending_{sym}"):
                 del st.session_state.pending_orders[sym]
+                save_data()
                 st.rerun()
 
 st.markdown("---")
@@ -250,14 +276,13 @@ for symbol in SYMBOLS:
                 'tp2_hit': False
             }
             del st.session_state.pending_orders[symbol]
+            save_data()
             st.rerun()
 
     if symbol in st.session_state.active_trades:
         status = "🟢 Active Trade"
     elif symbol in st.session_state.pending_orders:
         status = "⏳ Pending (Pro)"
-    elif symbol in st.session_state.resting_symbols:
-        status = "💤 Resting"
     else:
         status = "👀 Scanning..."
 
@@ -271,11 +296,6 @@ for symbol in SYMBOLS:
 
     if symbol in st.session_state.active_trades or symbol in st.session_state.pending_orders:
         continue
-        
-    if symbol in st.session_state.resting_symbols:
-        if time.time() - st.session_state.resting_symbols[symbol] > 900: 
-            del st.session_state.resting_symbols[symbol]
-        continue
 
     effective_atr_15m = atr_15m if atr_15m > 0 else (current_price * 0.01)
     effective_atr_1h = atr_1h if atr_1h > 0 else (current_price * 0.01)
@@ -288,9 +308,10 @@ for symbol in SYMBOLS:
                 'mode': '🎯 Pro',
                 'side': signal_1h
             }
+            save_data()
             st.rerun()
         except Exception as e:
-            st.error(f"Error placing Pro order for symbol: {e}")
+            st.error(f"Error placing Pro order: {e}")
 
     elif signal_15m in ['BUY', 'SELL']:
         try:
@@ -317,8 +338,9 @@ for symbol in SYMBOLS:
                 'tp1_hit': False,
                 'tp2_hit': False
             }
+            save_data()
             st.rerun()
         except Exception as e:
-            st.error(f"Error placing Action order for symbol: {e}")
+            st.error(f"Error placing Action order: {e}")
 
 st.dataframe(market_radar_data, use_container_width=True)
