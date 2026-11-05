@@ -29,14 +29,15 @@ def load_data():
             with open(DATA_FILE, 'r') as f:
                 return json.load(f)
         except:
-            return {'active_trades': {}, 'pending_orders': {}, 'resting_symbols': {}}
-    return {'active_trades': {}, 'pending_orders': {}, 'resting_symbols': {}}
+            return {'active_trades': {}, 'pending_orders': {}, 'resting_symbols': {}, 'realized_pnl': 0.0}
+    return {'active_trades': {}, 'pending_orders': {}, 'resting_symbols': {}, 'realized_pnl': 0.0}
 
 def save_data():
     data = {
         'active_trades': st.session_state.active_trades,
         'pending_orders': st.session_state.pending_orders,
-        'resting_symbols': st.session_state.resting_symbols
+        'resting_symbols': st.session_state.resting_symbols,
+        'realized_pnl': st.session_state.realized_pnl
     }
     with open(DATA_FILE, 'w') as f:
         json.dump(data, f)
@@ -46,10 +47,11 @@ if 'data_loaded' not in st.session_state:
     st.session_state.active_trades = saved_data.get('active_trades', {})
     st.session_state.pending_orders = saved_data.get('pending_orders', {})
     st.session_state.resting_symbols = saved_data.get('resting_symbols', {})
+    st.session_state.realized_pnl = saved_data.get('realized_pnl', 0.0)
     st.session_state.data_loaded = True
 
 # ==========================================
-# 3. الاتصال بمنصة OKX (للقراءة فقط - بدون مفاتيح)
+# 3. الاتصال بمنصة OKX (للقراءة فقط)
 # ==========================================
 try:
     exchange = ccxt.okx({
@@ -86,7 +88,12 @@ def analyze_smc(df):
     return 'NONE', 0.0, 0.0
 
 # ==========================================
-# 5. محرك التداول وإدارة الأهداف بدقة تامة
+# عرض إجمالي الأرباح المحققة (Realized PnL)
+# ==========================================
+st.sidebar.metric(label="💰 Realized Profits (Closed/TP1)", value=f"${st.session_state.realized_pnl:.2f}")
+
+# ==========================================
+# 5. محرك التداول وإدارة الأهداف وجني الأرباح الجزئي
 # ==========================================
 st.subheader("📊 Live Market Scanner & Portfolio")
 col1, col2 = st.columns(2)
@@ -109,29 +116,32 @@ with col1:
             pnl_pct = 0.0
             pnl_text = "Loading..."
 
-        # التأكد من وجود الوقف الأصلي للرجوع إليه لو الصفقة في السالب
         if 'original_sl' not in trade:
             trade['original_sl'] = trade['sl']
 
         status_msg = ""
         
-        # المنطق الصارم: لا يظهر أي Hit ولا يتحرك الوقف إلا لو السعر الحالي أعلى من الهدف والـ PnL بالموجب تماماً
+        # المنطق المحدث: جني الأرباح عند الهدف الأول وتأمين الباقي
         if live_price >= trade['tp2'] and pnl_pct > 0:
             trade['tp2_hit'] = True
             trade['tp1_hit'] = True
             trade['sl'] = trade['entry']
             save_data()
-            status_msg = "🚀 **مبروك! تم ضرب الهدف الثاني (Target 2) بنجاح كلياً!**"
+            status_msg = "🚀 **مبروك! تم ضرب الهدف الثاني (Target 2) وإغلاق الصفقة بالكامل بربح كلي!**"
         elif live_price >= trade['tp1'] and pnl_pct > 0:
-            trade['tp1_hit'] = True
-            trade['sl'] = trade['entry']  # تأمين الصفقة عند نقطة الدخول حصراً عند تحقيق أرباح حقيقية
-            save_data()
-            status_msg = "🎯 **رائع! تم ضرب الهدف الأول (Target 1)، وتم تأمين الصفقة عند نقطة الدخول (Break-even).**"
+            if not trade.get('tp1_hit', False):
+                # حساب مكسب التارجت الأول (افتراض بيع 50% من الكمية عند التارجت الأول)
+                tp1_gain_pct = ((trade['tp1'] - trade['entry']) / trade['entry']) * 100
+                st.session_state.realized_pnl += (tp1_gain_pct * 0.5) # إضافة الربح المحقق
+                trade['tp1_hit'] = True
+                trade['sl'] = trade['entry']  # نقل الوقف لنقطة الدخول للباقي
+                save_data()
+            status_msg = "🎯 **رائع! تم ضرب الهدف الأول (Target 1)، وتم أخذ جزء من الأرباح وتأمين الباقي عند نقطة الدخول (Break-even).**"
         else:
-            # لو الصفقة في السالب أو لم تصل للهدف بعد، نلغي أي علامة Hit ونعيد الوقف لمكانه الأصلي المحسوب بالـ ATR
-            trade['tp1_hit'] = False
-            trade['tp2_hit'] = False
-            trade['sl'] = trade['original_sl']
+            if not trade.get('tp1_hit', False):
+                trade['tp1_hit'] = False
+                trade['tp2_hit'] = False
+                trade['sl'] = trade['original_sl']
 
         with st.expander(f"{sym} | {trade['mode']} | PnL: {pnl_pct:.2f}%", expanded=True):
             if status_msg:
@@ -142,7 +152,7 @@ with col1:
             - **Entry Price:** ${trade['entry']:.4f}
             - **Live Price:** ${live_price:.4f}
             - **Total PnL:** {pnl_text}
-            - **🎯 Target 1:** ${trade['tp1']:.4f} {"(✅ Hit)" if trade.get('tp1_hit') and pnl_pct > 0 else ""}
+            - **🎯 Target 1:** ${trade['tp1']:.4f} {"(✅ TP1 Hit & Secured)" if trade.get('tp1_hit') and pnl_pct > 0 else ""}
             - **🚀 Target 2:** ${trade['tp2']:.4f} {"(🚀 Hit)" if trade.get('tp2_hit') and pnl_pct > 0 else ""}
             - <span style='color:#ff4b4b'>**🛑 Stop Loss:** ${trade['sl']:.4f}</span>
             """, unsafe_allow_html=True)
