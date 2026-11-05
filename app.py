@@ -1,4 +1,4 @@
-import streamlit as st
+ import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 import ccxt
 import pandas as pd
@@ -86,7 +86,7 @@ def analyze_smc(df):
     return 'NONE', 0.0, 0.0
 
 # ==========================================
-# 5. محرك التداول وإدارة الأهداف (Partial TP & Targets Check)
+# 5. محرك التداول وإدارة الأهداف بدقة
 # ==========================================
 st.subheader("📊 Live Market Scanner & Portfolio")
 col1, col2 = st.columns(2)
@@ -109,28 +109,27 @@ with col1:
             pnl_pct = 0.0
             pnl_text = "Loading..."
 
-        # --- تتبع الأهداف بناءً على السعر الحالي الفعلي بدقة ---
+        # حفظ الوقف الأصلي لو مش موجود
+        if 'original_sl' not in trade:
+            trade['original_sl'] = trade['sl']
+
         status_msg = ""
         
-        # التأكد من صحة حالة الـ Hit والـ Stop Loss
+        # المنطق السليم: الوقف لا يتحرك لنقطة الدخول إلا لو السعر الحالي صعد وضرب التارجت الأول فعلا
         if live_price >= trade['tp2']:
             trade['tp2_hit'] = True
             trade['tp1_hit'] = True
+            trade['sl'] = trade['entry']
             save_data()
             status_msg = "🚀 **مبروك! تم ضرب الهدف الثاني (Target 2) بنجاح كلياً!**"
         elif live_price >= trade['tp1']:
             trade['tp1_hit'] = True
-            # ترحيل الوقف لنقطة الدخول فقط عند ضرب التارجت الأول حقيقة
-            if 'original_sl' not in trade:
-                trade['original_sl'] = trade['sl']
-            trade['sl'] = trade['entry'] 
+            trade['sl'] = trade['entry']  # ترحيل الوقف لنقطة الدخول (Break-even) عند تحقيق الهدف الأول فقط
             save_data()
             status_msg = "🎯 **رائع! تم ضرب الهدف الأول (Target 1)، وتم تأمين الصفقة عند نقطة الدخول (Break-even).**"
         else:
-            # لو السعر تحت الهدف الأول، نلغي الـ hit ونرجع الستوب لوز مكانه الطبيعي لو كان اتقلب
-            trade['tp1_hit'] = False
-            trade['tp2_hit'] = False
-            if 'original_sl' in trade:
+            # لو السعر لسه منهار أو تحت التارجت، الوقف يظل في مكانه الأصلي المحسوب بالـ ATR
+            if not trade.get('tp1_hit', False):
                 trade['sl'] = trade['original_sl']
 
         with st.expander(f"{sym} | {trade['mode']} | PnL: {pnl_pct:.2f}%", expanded=True):
@@ -302,3 +301,4 @@ for symbol in SYMBOLS:
 
 # عرض جدول الرادار تحت الصفقات
 st.dataframe(market_radar_data, use_container_width=True)
+           
