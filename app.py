@@ -4,6 +4,8 @@ import ccxt
 import pandas as pd
 import pandas_ta as ta
 import time
+import json
+import os
 
 # ==========================================
 # 1. إعدادات الشاشة الأساسية والتحديث التلقائي
@@ -11,34 +13,52 @@ import time
 st.set_page_config(page_title="SMC Sniper Bot", layout="wide")
 st.title("🤖 SMC Sniper Bot - Paper Trading")
 
-# تحديث الشاشة كل دقيقة (60,000 ملي ثانية) لضمان متابعة الـ Resting والأهداف
 st_autorefresh(interval=60000, limit=None, key="auto_refresh")
 
 # ==========================================
-# 2. إعدادات البوت وإدارة المخاطر
+# 2. إعدادات البوت وإدارة المخاطر والذاكرة الدائمة
 # ==========================================
-MAX_OPEN_TRADES = 99  # بدون حد أقصى للـ Paper Trading
+MAX_OPEN_TRADES = 99  
 SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'LINK/USDT', 'NEAR/USDT', 'SUI/USDT', 'AVAX/USDT', 'ADA/USDT', 'XRP/USDT']
 
-# إعدادات الذاكرة المؤقتة (Session State)
-if 'active_trades' not in st.session_state:
-    st.session_state.active_trades = {}
-if 'pending_orders' not in st.session_state:
-    st.session_state.pending_orders = {}
-if 'resting_symbols' not in st.session_state:
-    st.session_state.resting_symbols = {}
+DATA_FILE = 'trades_data.json'
+
+def load_data():
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, 'r') as f:
+                return json.load(f)
+        except:
+            return {'active_trades': {}, 'pending_orders': {}, 'resting_symbols': {}}
+    return {'active_trades': {}, 'pending_orders': {}, 'resting_symbols': {}}
+
+def save_data():
+    data = {
+        'active_trades': st.session_state.active_trades,
+        'pending_orders': st.session_state.pending_orders,
+        'resting_symbols': st.session_state.resting_symbols
+    }
+    with open(DATA_FILE, 'w') as f:
+        json.dump(data, f)
+
+if 'data_loaded' not in st.session_state:
+    saved_data = load_data()
+    st.session_state.active_trades = saved_data.get('active_trades', {})
+    st.session_state.pending_orders = saved_data.get('pending_orders', {})
+    st.session_state.resting_symbols = saved_data.get('resting_symbols', {})
+    st.session_state.data_loaded = True
 
 # ==========================================
-# 3. الاتصال بمنصة OKX (Paper Trading)
+# 3. الاتصال بمنصة OKX بأمان (Streamlit Secrets)
 # ==========================================
 try:
     exchange = ccxt.okx({
-        'apiKey': 'YOUR_API_KEY',       # ضعي مفاتيح الـ Demo هنا
-        'secret': 'YOUR_SECRET_KEY',
-        'password': 'YOUR_PASSWORD',
+        'apiKey': st.secrets["OKX_API_KEY"],       
+        'secret': st.secrets["OKX_SECRET_KEY"],
+        'password': st.secrets["OKX_PASSWORD"],
         'enableRateLimit': True,
     })
-    exchange.set_sandbox_mode(True)  # تفعيل وضع Paper Trading
+    exchange.set_sandbox_mode(True)  
 except Exception as e:
     st.error(f"Error connecting to OKX: {e}")
 
@@ -55,10 +75,6 @@ def fetch_data(symbol, timeframe, limit=100):
         return None
 
 def analyze_smc(df):
-    """
-    دالة تحليل مدرسة الـ SMC (Breakout & FVG)
-    ترجع إشارة الشراء، سعر فجوة القيمة العادلة للأوامر المعلقة، وقيمة التذبذب
-    """
     if df is None or len(df) < 3:
         return 'NONE', 0.0, 0.0
 
@@ -67,7 +83,6 @@ def analyze_smc(df):
     atr_value = df['ATR'].iloc[-1]
     
     is_breakout = last_close > prev_high 
-    # حساب منطقة FVG لتعليق الأوامر
     fvg_price = df['low'].iloc[-1] + (df['high'].iloc[-1] - df['low'].iloc[-1]) * 0.5
     
     if is_breakout:
@@ -75,103 +90,163 @@ def analyze_smc(df):
     return 'NONE', 0.0, 0.0
 
 # ==========================================
-# 5. محرك التداول وعرض الشاشة
+# 5. محرك التداول وعرض الشاشة (الـ Portfolio)
 # ==========================================
 st.subheader("📊 Live Market Scanner & Portfolio")
-
-# تقسيم الشاشة لعمودين (صفقات شغالة / أوامر معلقة)
 col1, col2 = st.columns(2)
+
 with col1:
     st.markdown("### 🟢 Active Trades")
+    if not st.session_state.active_trades:
+        st.info("No active trades yet. Waiting for breakouts or pending triggers...")
+        
     for sym, trade in list(st.session_state.active_trades.items()):
-        # استخدام :.4f لعرض 4 أرقام عشرية بدقة تامة
-        with st.expander(f"{sym} | {trade['mode']} | Entry: ${trade['entry']:.4f}"):
-            st.write(f"**Mode:** {trade['mode']}")
-            st.write(f"**Entry Price:** ${trade['entry']:.4f}")
-            st.write(f"**🎯 Target 1:** ${trade['tp1']:.4f}")
-            st.write(f"**🚀 Target 2:** ${trade['tp2']:.4f}")
-            st.markdown(f"<span style='color:#ff4b4b'>**🛑 Stop Loss:** ${trade['sl']:.4f}</span>", unsafe_allow_html=True)
+        with st.expander(f"{sym} | {trade['mode']} | Entry: ${trade['entry']:.4f}", expanded=True):
+            st.markdown(f"""
+            - **Mode:** {trade['mode']}
+            - **Entry Price:** ${trade['entry']:.4f}
+            - **🎯 Target 1:** ${trade['tp1']:.4f}
+            - **🚀 Target 2:** ${trade['tp2']:.4f}
+            - <span style='color:#ff4b4b'>**🛑 Stop Loss:** ${trade['sl']:.4f}</span>
+            """, unsafe_allow_html=True)
             
-            # زر يدوي للحذف في حالة التحديثات
+            st.markdown("---")
             if st.button(f"Remove {sym}", key=f"remove_active_{sym}"):
                 del st.session_state.active_trades[sym]
+                save_data()  # حفظ بعد الحذف
                 st.rerun()
 
 with col2:
     st.markdown("### ⏳ Pending Orders (Pro Sniping)")
+    if not st.session_state.pending_orders:
+        st.info("No pending orders. Scanning 1h timeframe...")
+        
     for sym, order in list(st.session_state.pending_orders.items()):
-        with st.expander(f"{sym} | {order['mode']} | Waiting at FVG: ${order['fvg_price']:.4f}"):
-            st.write(f"**Mode:** {order['mode']}")
-            st.write(f"**Net Waiting Price:** ${order['fvg_price']:.4f}")
+        with st.expander(f"{sym} | {order['mode']} | Waiting at FVG: ${order['fvg_price']:.4f}", expanded=True):
+            st.markdown(f"""
+            - **Mode:** {order['mode']}
+            - **Net Waiting Price:** ${order['fvg_price']:.4f}
+            """, unsafe_allow_html=True)
             
+            st.markdown("---")
             if st.button(f"Cancel {sym}", key=f"cancel_pending_{sym}"):
                 del st.session_state.pending_orders[sym]
+                save_data() # حفظ بعد الحذف
                 st.rerun()
 
 st.markdown("---")
 
 # ==========================================
-# 6. لوب فحص السوق واصطياد الفرص
+# 6. رادار السوق ولوب فحص الفرص
 # ==========================================
-for symbol in SYMBOLS:
-    # تخطي العملة لو شغالة، معلقة، أو في فترة راحة
-    if symbol in st.session_state.active_trades or symbol in st.session_state.pending_orders:
-        continue
-    
-    if symbol in st.session_state.resting_symbols:
-        # فترة راحة 15 دقيقة (900 ثانية) بعد ضرب الستوب
-        if time.time() - st.session_state.resting_symbols[symbol] > 900:
-            del st.session_state.resting_symbols[symbol]
-        continue
+st.markdown("### 📡 Market Radar (Live Scanner)")
+market_radar_data = []
 
-    # جلب البيانات
+for symbol in SYMBOLS:
     df_1h = fetch_data(symbol, '1h')
     df_15m = fetch_data(symbol, '15m')
     
-    # تحليل فريم الساعة والـ 15 دقيقة
+    if df_15m is None or df_1h is None:
+        continue
+        
+    current_price = df_15m['close'].iloc[-1]
+    current_low = df_15m['low'].iloc[-1]  
+    
     signal_1h, fvg_price_1h, atr_1h = analyze_smc(df_1h)
     signal_15m, _, atr_15m = analyze_smc(df_15m)
+    volume_15m = df_15m['volume'].iloc[-1]
 
-    current_price = df_15m['close'].iloc[-1] if df_15m is not None else 0
-    if current_price == 0:
+    # --- مراقبة وتفعيل الأوامر المعلقة (Pro Trigger) ---
+    if symbol in st.session_state.pending_orders:
+        pending_order = st.session_state.pending_orders[symbol]
+        fvg_entry = pending_order['fvg_price']
+        
+        if current_low <= fvg_entry:
+            saved_atr = pending_order['atr']
+            min_target_pct = 0.015
+            
+            tp1_dist = saved_atr * 1.5
+            tp2_dist = saved_atr * 3.0
+            sl_dist = saved_atr * 1.5
+            
+            if (tp1_dist / fvg_entry) < min_target_pct:
+                tp1_price = fvg_entry * (1 + min_target_pct)
+                tp2_price = fvg_entry * (1 + (min_target_pct * 2.0))
+                sl_price = fvg_entry * (1 - min_target_pct)
+            else:
+                tp1_price = fvg_entry + tp1_dist
+                tp2_price = fvg_entry + tp2_dist
+                sl_price = fvg_entry - sl_dist
+
+            st.session_state.active_trades[symbol] = {
+                'entry': fvg_entry,
+                'tp1': tp1_price,
+                'tp2': tp2_price,
+                'sl': sl_price,
+                'mode': '🎯 Pro (Triggered)'
+            }
+            del st.session_state.pending_orders[symbol]
+            save_data() # حفظ التغيير
+            st.rerun()
+
+    # --- تحديد حالة العملة لجدول الرادار ---
+    if symbol in st.session_state.active_trades:
+        status = "🟢 Active Trade"
+    elif symbol in st.session_state.pending_orders:
+        status = "⏳ Pending (Pro)"
+    elif symbol in st.session_state.resting_symbols:
+        status = "💤 Resting"
+    else:
+        status = "👀 Scanning..."
+
+    market_radar_data.append({
+        "🪙 Symbol": symbol,
+        "💵 Price": f"${current_price:.4f}",
+        "📏 15m ATR": f"{atr_15m:.4f}",
+        "📊 Volume": f"{volume_15m:.1f}",
+        "Status": status
+    })
+
+    # --- منطق اصطياد فرص جديدة ---
+    if symbol in st.session_state.active_trades or symbol in st.session_state.pending_orders:
+        continue
+        
+    if symbol in st.session_state.resting_symbols:
+        if time.time() - st.session_state.resting_symbols[symbol] > 900: 
+            del st.session_state.resting_symbols[symbol]
+            save_data()
         continue
 
-    # ----------------------------------------------------
-    # اتخاذ القرار (Pro يغلب لو الإشارة على فريم الساعة)
-    # ----------------------------------------------------
+    # قرار القناص (Pro)
     if signal_1h == 'BUY':
         try:
-            # هنا يتم إرسال Limit Order حقيقي للمنصة مستقبلاً
             st.session_state.pending_orders[symbol] = {
                 'fvg_price': fvg_price_1h,
                 'atr': atr_1h,
                 'mode': '🎯 Pro'
             }
+            save_data() # حفظ الأمر الجديد
+            st.rerun()
         except Exception as e:
             st.error(f"Error placing Pro order for {symbol}: {e}")
 
-    # لو مفيش إشارة قناص، ندور على إشارة الانفجار (Action)
+    # قرار الانفجار (Action)
     elif signal_15m == 'BUY':
         try:
-            # --- حل مشكلة خنقة الـ ATR للعملات الرخيصة (Minimum Threshold) ---
-            min_target_pct = 0.015  # الحد الأدنى للهدف 1.5%
-            
-            # حساب الأهداف الافتراضية
+            min_target_pct = 0.015 
             tp1_dist = atr_15m * 1.5
             tp2_dist = atr_15m * 3.0
             sl_dist = atr_15m * 1.5
             
-            # لو الـ ATR ضعيف جداً والهدف أقرب من 1.5%، بنفرض الأهداف الإجبارية
             if (tp1_dist / current_price) < min_target_pct:
-                tp1_price = current_price * (1 + min_target_pct)            # هدف أول إجباري 1.5%
-                tp2_price = current_price * (1 + (min_target_pct * 2.0))    # هدف تاني إجباري 3%
-                sl_price = current_price * (1 - min_target_pct)             # ستوب إجباري 1.5%
+                tp1_price = current_price * (1 + min_target_pct)
+                tp2_price = current_price * (1 + (min_target_pct * 2.0))
+                sl_price = current_price * (1 - min_target_pct)
             else:
                 tp1_price = current_price + tp1_dist
                 tp2_price = current_price + tp2_dist
                 sl_price = current_price - sl_dist
 
-            # تسجيل الصفقة في الشاشة (وهنا يتم وضع Market Order لاحقاً)
             st.session_state.active_trades[symbol] = {
                 'entry': current_price,
                 'tp1': tp1_price,
@@ -179,5 +254,10 @@ for symbol in SYMBOLS:
                 'sl': sl_price,
                 'mode': '🔥 Action'
             }
+            save_data() # حفظ الصفقة الجديدة
+            st.rerun()
         except Exception as e:
             st.error(f"Error placing Action order for {symbol}: {e}")
+
+# عرض جدول الرادار تحت الصفقات
+st.dataframe(market_radar_data, use_container_width=True)
