@@ -17,14 +17,13 @@ st.title("🤖 SMC Sniper Bot - Paper Trading Simulator")
 st_autorefresh(interval=60000, limit=None, key="auto_refresh")
 
 # ==========================================
-# 2. إعدادات البوت وإدارة المخاطر والذاكرة الدائمة
+# 2. إعدادات البوت والذاكرة الدائمة (JSON)
 # ==========================================
 MAX_OPEN_TRADES = 99  
 SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'LINK/USDT', 'NEAR/USDT', 'SUI/USDT', 'AVAX/USDT', 'ADA/USDT', 'XRP/USDT']
 
 DATA_FILE = 'trades_data.json'
 
-# دالة لقراءة البيانات من الملف 
 def load_data():
     if os.path.exists(DATA_FILE):
         try:
@@ -34,7 +33,6 @@ def load_data():
             return {'active_trades': {}, 'pending_orders': {}, 'resting_symbols': {}}
     return {'active_trades': {}, 'pending_orders': {}, 'resting_symbols': {}}
 
-# دالة لحفظ البيانات في الملف
 def save_data():
     data = {
         'active_trades': st.session_state.active_trades,
@@ -44,7 +42,6 @@ def save_data():
     with open(DATA_FILE, 'w') as f:
         json.dump(data, f)
 
-# تحميل البيانات أول مرة الشاشة تفتح
 if 'data_loaded' not in st.session_state:
     saved_data = load_data()
     st.session_state.active_trades = saved_data.get('active_trades', {})
@@ -56,7 +53,6 @@ if 'data_loaded' not in st.session_state:
 # 3. الاتصال بمنصة OKX (للقراءة فقط - بدون مفاتيح)
 # ==========================================
 try:
-    # اتصال عام لجلب الأسعار الحية فقط بدون أي API Keys
     exchange = ccxt.okx({
         'enableRateLimit': True,
     })
@@ -84,7 +80,6 @@ def analyze_smc(df):
     atr_value = df['ATR'].iloc[-1]
     
     is_breakout = last_close > prev_high 
-    # حساب منطقة FVG (كمثال: منتصف الشمعة)
     fvg_price = df['low'].iloc[-1] + (df['high'].iloc[-1] - df['low'].iloc[-1]) * 0.5
     
     if is_breakout:
@@ -103,10 +98,22 @@ with col1:
         st.info("No active trades yet. Waiting for breakouts or pending triggers...")
         
     for sym, trade in list(st.session_state.active_trades.items()):
-        with st.expander(f"{sym} | {trade['mode']} | Entry: ${trade['entry']:.4f}", expanded=True):
+        try:
+            live_price = exchange.fetch_ticker(sym)['last']
+            pnl_pct = ((live_price - trade['entry']) / trade['entry']) * 100
+            pnl_color = "#00ff00" if pnl_pct >= 0 else "#ff4b4b"
+            pnl_text = f"<span style='color:{pnl_color}'><b>{pnl_pct:.2f}%</b></span>"
+        except:
+            live_price = trade['entry']
+            pnl_pct = 0.0
+            pnl_text = "Loading..."
+
+        with st.expander(f"{sym} | {trade['mode']} | PnL: {pnl_pct:.2f}%", expanded=True):
             st.markdown(f"""
             - **Mode:** {trade['mode']}
             - **Entry Price:** ${trade['entry']:.4f}
+            - **Live Price:** ${live_price:.4f}
+            - **Total PnL:** {pnl_text}
             - **🎯 Target 1:** ${trade['tp1']:.4f}
             - **🚀 Target 2:** ${trade['tp2']:.4f}
             - <span style='color:#ff4b4b'>**🛑 Stop Loss:** ${trade['sl']:.4f}</span>
@@ -115,7 +122,7 @@ with col1:
             st.markdown("---")
             if st.button(f"Remove {sym}", key=f"remove_active_{sym}"):
                 del st.session_state.active_trades[sym]
-                save_data()  # حفظ بعد الحذف
+                save_data()  
                 st.rerun()
 
 with col2:
@@ -133,7 +140,7 @@ with col2:
             st.markdown("---")
             if st.button(f"Cancel {sym}", key=f"cancel_pending_{sym}"):
                 del st.session_state.pending_orders[sym]
-                save_data() # حفظ بعد الحذف
+                save_data() 
                 st.rerun()
 
 st.markdown("---")
@@ -163,7 +170,6 @@ for symbol in SYMBOLS:
         pending_order = st.session_state.pending_orders[symbol]
         fvg_entry = pending_order['fvg_price']
         
-        # لو السعر نزل ضرب نقطة الدخول المعلقة
         if current_low <= fvg_entry:
             saved_atr = pending_order['atr']
             min_target_pct = 0.015
@@ -189,7 +195,7 @@ for symbol in SYMBOLS:
                 'mode': '🎯 Pro (Triggered)'
             }
             del st.session_state.pending_orders[symbol]
-            save_data() # حفظ التغيير
+            save_data() 
             st.rerun()
 
     # --- تحديد حالة العملة لجدول الرادار ---
@@ -220,7 +226,6 @@ for symbol in SYMBOLS:
             save_data()
         continue
 
-    # قرار القناص (Pro)
     if signal_1h == 'BUY':
         try:
             st.session_state.pending_orders[symbol] = {
@@ -228,12 +233,11 @@ for symbol in SYMBOLS:
                 'atr': atr_1h,
                 'mode': '🎯 Pro'
             }
-            save_data() # حفظ الأمر الجديد
+            save_data() 
             st.rerun()
         except Exception as e:
             st.error(f"Error placing Pro order for {symbol}: {e}")
 
-    # قرار الانفجار (Action)
     elif signal_15m == 'BUY':
         try:
             min_target_pct = 0.015 
@@ -257,7 +261,7 @@ for symbol in SYMBOLS:
                 'sl': sl_price,
                 'mode': '🔥 Action'
             }
-            save_data() # حفظ الصفقة الجديدة
+            save_data() 
             st.rerun()
         except Exception as e:
             st.error(f"Error placing Action order for {symbol}: {e}")
