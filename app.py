@@ -8,12 +8,16 @@ import json
 import os
 
 # ==========================================
-# 1. إعدادات الشاشة الأساسية والتحديث التلقائي
+# 1. إعدادات الشاشة الأساسية والتحديث التلقائي (كل 15 ثانية)
 # ==========================================
 st.set_page_config(page_title="SMC Sniper Bot", layout="wide")
 st.title("🤖 SMC Sniper Bot - Paper Trading Simulator")
 
-st_autorefresh(interval=60000, limit=None, key="auto_refresh")
+st_autorefresh(interval=15000, limit=None, key="auto_refresh")
+
+# زرار التحديث اليدوي الفوري (Force Update)
+if st.button("🔄 Force Update Price / Refresh Now"):
+    st.rerun()
 
 # ==========================================
 # 2. إعدادات البوت والذاكرة الدائمة (JSON)
@@ -61,19 +65,17 @@ except Exception as e:
     st.error(f"Error connecting to OKX: {e}")
 
 # ==========================================
-# 4. دوال التحليل الفني (SMC & ATR الآمنة والمحدثة)
+# 4. دوال التحليل الفني (SMC & ATR الآمنة)
 # ==========================================
 def fetch_data(symbol, timeframe, limit=100):
     try:
         bars = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
         df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         
-        # تحويل الأعمدة إلى أرقام عشرية نقية لمنع الأخطاء
         df['high'] = pd.to_numeric(df['high'], errors='coerce')
         df['low'] = pd.to_numeric(df['low'], errors='coerce')
         df['close'] = pd.to_numeric(df['close'], errors='coerce')
         
-        # حساب الـ ATR بطريقة آمنة
         atr_series = ta.atr(df['high'], df['low'], df['close'], length=14)
         if atr_series is not None and not atr_series.empty:
             df['ATR'] = atr_series
@@ -215,12 +217,10 @@ for symbol in SYMBOLS:
     signal_15m, _, atr_15m = analyze_smc(df_15m)
     volume_15m = df_15m['volume'].iloc[-1]
 
-    # معالجة عرض الـ ATR لمنع ظهور الصفر نهائياً
     raw_atr = df_15m['ATR'].iloc[-1] if 'ATR' in df_15m.columns else 0.0
     atr_val = float(raw_atr) if (raw_atr is not None and not pd.isna(raw_atr)) else 0.0
     atr_display = f"{atr_val:.4f}" if atr_val > 0 else f"{(current_price * 0.01):.4f}"
 
-    # --- مراقبة وتفعيل الأوامر المعلقة (Pro Trigger) ---
     if symbol in st.session_state.pending_orders:
         pending_order = st.session_state.pending_orders[symbol]
         fvg_entry = pending_order['fvg_price']
@@ -256,7 +256,6 @@ for symbol in SYMBOLS:
             save_data() 
             st.rerun()
 
-    # --- تحديد حالة العملة لجدول الرادار ---
     if symbol in st.session_state.active_trades:
         status = "🟢 Active Trade"
     elif symbol in st.session_state.pending_orders:
@@ -274,7 +273,6 @@ for symbol in SYMBOLS:
         "Status": status
     })
 
-    # --- منطق اصطياد فرص جديدة ---
     if symbol in st.session_state.active_trades or symbol in st.session_state.pending_orders:
         continue
         
@@ -330,5 +328,4 @@ for symbol in SYMBOLS:
         except Exception as e:
             st.error(f"Error placing Action order for {symbol}: {e}")
 
-# عرض جدول الرادار تحت الصفقات
 st.dataframe(market_radar_data, use_container_width=True)
