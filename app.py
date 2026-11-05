@@ -109,26 +109,29 @@ with col1:
             pnl_pct = 0.0
             pnl_text = "Loading..."
 
-        # --- تتبع الأهداف بناءً على السعر الحالي الفعلي لمنع التضارب ---
+        # --- تتبع الأهداف بناءً على السعر الحالي الفعلي بدقة ---
         status_msg = ""
         
-        # فحص الهدف الثاني بناءً على السعر الحالي أو الارتفاع الحقيقي
+        # التأكد من صحة حالة الـ Hit والـ Stop Loss
         if live_price >= trade['tp2']:
             trade['tp2_hit'] = True
             trade['tp1_hit'] = True
             save_data()
             status_msg = "🚀 **مبروك! تم ضرب الهدف الثاني (Target 2) بنجاح كلياً!**"
         elif live_price >= trade['tp1']:
-            if not trade.get('tp1_hit', False):
-                trade['tp1_hit'] = True
-                trade['sl'] = trade['entry'] # ترحيل الوقف لنقطة الدخول
-                save_data()
-                status_msg = "🎯 **رائع! تم ضرب الهدف الأول (Target 1)، وتم تأمين الصفقة عند نقطة الدخول (Break-even).**"
+            trade['tp1_hit'] = True
+            # ترحيل الوقف لنقطة الدخول فقط عند ضرب التارجت الأول حقيقة
+            if 'original_sl' not in trade:
+                trade['original_sl'] = trade['sl']
+            trade['sl'] = trade['entry'] 
+            save_data()
+            status_msg = "🎯 **رائع! تم ضرب الهدف الأول (Target 1)، وتم تأمين الصفقة عند نقطة الدخول (Break-even).**"
         else:
-            # لو السعر رجع نزل تحت التارجت، بنلغي علامة الـ Hit عشان المنطق يبقي سليم
-            if live_price < trade['entry'] and trade.get('tp1_hit', False) and trade['sl'] == trade['entry']:
-                # لو السعر كسر الدخول ونزل، نرجع الستوب لوز مكانه الطبيعي
-                pass
+            # لو السعر تحت الهدف الأول، نلغي الـ hit ونرجع الستوب لوز مكانه الطبيعي لو كان اتقلب
+            trade['tp1_hit'] = False
+            trade['tp2_hit'] = False
+            if 'original_sl' in trade:
+                trade['sl'] = trade['original_sl']
 
         with st.expander(f"{sym} | {trade['mode']} | PnL: {pnl_pct:.2f}%", expanded=True):
             if status_msg:
@@ -139,8 +142,8 @@ with col1:
             - **Entry Price:** ${trade['entry']:.4f}
             - **Live Price:** ${live_price:.4f}
             - **Total PnL:** {pnl_text}
-            - **🎯 Target 1:** ${trade['tp1']:.4f} {"(✅ Hit)" if trade.get('tp1_hit') and live_price >= trade['tp1'] else ""}
-            - **🚀 Target 2:** ${trade['tp2']:.4f} {"(🚀 Hit)" if trade.get('tp2_hit') and live_price >= trade['tp2'] else ""}
+            - **🎯 Target 1:** ${trade['tp1']:.4f} {"(✅ Hit)" if trade.get('tp1_hit') else ""}
+            - **🚀 Target 2:** ${trade['tp2']:.4f} {"(🚀 Hit)" if trade.get('tp2_hit') else ""}
             - <span style='color:#ff4b4b'>**🛑 Stop Loss:** ${trade['sl']:.4f}</span>
             """, unsafe_allow_html=True)
             
@@ -217,6 +220,7 @@ for symbol in SYMBOLS:
                 'tp1': tp1_price,
                 'tp2': tp2_price,
                 'sl': sl_price,
+                'original_sl': sl_price,
                 'mode': '🎯 Pro (Triggered)',
                 'tp1_hit': False,
                 'tp2_hit': False
@@ -286,6 +290,7 @@ for symbol in SYMBOLS:
                 'tp1': tp1_price,
                 'tp2': tp2_price,
                 'sl': sl_price,
+                'original_sl': sl_price,
                 'mode': '🔥 Action',
                 'tp1_hit': False,
                 'tp2_hit': False
