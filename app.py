@@ -11,8 +11,9 @@ import os
 # 1. إعدادات الشاشة الأساسية والتحديث التلقائي
 # ==========================================
 st.set_page_config(page_title="SMC Sniper Bot", layout="wide")
-st.title("🤖 SMC Sniper Bot - Paper Trading")
+st.title("🤖 SMC Sniper Bot - Paper Trading Simulator")
 
+# تحديث الشاشة كل دقيقة (60,000 ملي ثانية) 
 st_autorefresh(interval=60000, limit=None, key="auto_refresh")
 
 # ==========================================
@@ -23,6 +24,7 @@ SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'LINK/USDT', 'NEAR/US
 
 DATA_FILE = 'trades_data.json'
 
+# دالة لقراءة البيانات من الملف 
 def load_data():
     if os.path.exists(DATA_FILE):
         try:
@@ -32,6 +34,7 @@ def load_data():
             return {'active_trades': {}, 'pending_orders': {}, 'resting_symbols': {}}
     return {'active_trades': {}, 'pending_orders': {}, 'resting_symbols': {}}
 
+# دالة لحفظ البيانات في الملف
 def save_data():
     data = {
         'active_trades': st.session_state.active_trades,
@@ -41,6 +44,7 @@ def save_data():
     with open(DATA_FILE, 'w') as f:
         json.dump(data, f)
 
+# تحميل البيانات أول مرة الشاشة تفتح
 if 'data_loaded' not in st.session_state:
     saved_data = load_data()
     st.session_state.active_trades = saved_data.get('active_trades', {})
@@ -49,16 +53,13 @@ if 'data_loaded' not in st.session_state:
     st.session_state.data_loaded = True
 
 # ==========================================
-# 3. الاتصال بمنصة OKX بأمان (Streamlit Secrets)
+# 3. الاتصال بمنصة OKX (للقراءة فقط - بدون مفاتيح)
 # ==========================================
 try:
+    # اتصال عام لجلب الأسعار الحية فقط بدون أي API Keys
     exchange = ccxt.okx({
-        'apiKey': st.secrets["OKX_API_KEY"],       
-        'secret': st.secrets["OKX_SECRET_KEY"],
-        'password': st.secrets["OKX_PASSWORD"],
         'enableRateLimit': True,
     })
-    exchange.set_sandbox_mode(True)  
 except Exception as e:
     st.error(f"Error connecting to OKX: {e}")
 
@@ -83,6 +84,7 @@ def analyze_smc(df):
     atr_value = df['ATR'].iloc[-1]
     
     is_breakout = last_close > prev_high 
+    # حساب منطقة FVG (كمثال: منتصف الشمعة)
     fvg_price = df['low'].iloc[-1] + (df['high'].iloc[-1] - df['low'].iloc[-1]) * 0.5
     
     if is_breakout:
@@ -161,6 +163,7 @@ for symbol in SYMBOLS:
         pending_order = st.session_state.pending_orders[symbol]
         fvg_entry = pending_order['fvg_price']
         
+        # لو السعر نزل ضرب نقطة الدخول المعلقة
         if current_low <= fvg_entry:
             saved_atr = pending_order['atr']
             min_target_pct = 0.015
