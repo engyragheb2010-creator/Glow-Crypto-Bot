@@ -13,7 +13,6 @@ import os
 st.set_page_config(page_title="SMC Sniper Bot", layout="wide")
 st.title("🤖 SMC Sniper Bot - Paper Trading Simulator")
 
-# تحديث الشاشة كل دقيقة (60,000 ملي ثانية) 
 st_autorefresh(interval=60000, limit=None, key="auto_refresh")
 
 # ==========================================
@@ -87,7 +86,7 @@ def analyze_smc(df):
     return 'NONE', 0.0, 0.0
 
 # ==========================================
-# 5. محرك التداول وعرض الشاشة (الـ Portfolio)
+# 5. محرك التداول وإدارة الأهداف (Partial TP & Targets Check)
 # ==========================================
 st.subheader("📊 Live Market Scanner & Portfolio")
 col1, col2 = st.columns(2)
@@ -99,23 +98,44 @@ with col1:
         
     for sym, trade in list(st.session_state.active_trades.items()):
         try:
-            live_price = exchange.fetch_ticker(sym)['last']
+            ticker = exchange.fetch_ticker(sym)
+            live_price = ticker['last']
+            live_high = ticker['high'] if 'high' in ticker else live_price
+            
             pnl_pct = ((live_price - trade['entry']) / trade['entry']) * 100
             pnl_color = "#00ff00" if pnl_pct >= 0 else "#ff4b4b"
             pnl_text = f"<span style='color:{pnl_color}'><b>{pnl_pct:.2f}%</b></span>"
         except:
             live_price = trade['entry']
+            live_high = trade['entry']
             pnl_pct = 0.0
             pnl_text = "Loading..."
 
+        # --- تتبع الأهداف وتحديث الحالة أوتوماتيك ---
+        status_msg = ""
+        # فحص الوصول للهدف الثاني
+        if live_high >= trade['tp2'] and not trade.get('tp2_hit', False):
+            trade['tp2_hit'] = True
+            save_data()
+            status_msg = "🚀 **مبروك! تم ضرب الهدف الثاني (Target 2) بنجاح كليا!**"
+        # فحص الوصول للهدف الأول وتأمين الصفقة (Break-even)
+        elif live_high >= trade['tp1'] and not trade.get('tp1_hit', False):
+            trade['tp1_hit'] = True
+            trade['sl'] = trade['entry'] # ترحيل الوقف لنقطة الدخول
+            save_data()
+            status_msg = "🎯 **رائع! تم ضرب الهدف الأول (Target 1)، وتم تأمين الصفقة عند نقطة الدخول (Break-even).**"
+
         with st.expander(f"{sym} | {trade['mode']} | PnL: {pnl_pct:.2f}%", expanded=True):
+            if status_msg:
+                st.success(status_msg)
+                
             st.markdown(f"""
             - **Mode:** {trade['mode']}
             - **Entry Price:** ${trade['entry']:.4f}
             - **Live Price:** ${live_price:.4f}
             - **Total PnL:** {pnl_text}
-            - **🎯 Target 1:** ${trade['tp1']:.4f}
-            - **🚀 Target 2:** ${trade['tp2']:.4f}
+            - **🎯 Target 1:** ${trade['tp1']:.4f} {"(✅ Hit)" if trade.get('tp1_hit') else ""}
+            - **🚀 Target 2:** ${trade['tp2']:.4f} {"(🚀 Hit)" if trade.get('tp2_hit') else ""}
             - <span style='color:#ff4b4b'>**🛑 Stop Loss:** ${trade['sl']:.4f}</span>
             """, unsafe_allow_html=True)
             
@@ -131,7 +151,7 @@ with col2:
         st.info("No pending orders. Scanning 1h timeframe...")
         
     for sym, order in list(st.session_state.pending_orders.items()):
-        with st.expander(f"{sym} | {order['mode']} | Waiting at FVG: ${order['fvg_price']:.4f}", expanded=True):
+        with st.expander(f"{sym} | {order['mode']} | Waiting at Fvg: ${order['fvg_price']:.4f}", expanded=True):
             st.markdown(f"""
             - **Mode:** {order['mode']}
             - **Net Waiting Price:** ${order['fvg_price']:.4f}
@@ -192,7 +212,9 @@ for symbol in SYMBOLS:
                 'tp1': tp1_price,
                 'tp2': tp2_price,
                 'sl': sl_price,
-                'mode': '🎯 Pro (Triggered)'
+                'mode': '🎯 Pro (Triggered)',
+                'tp1_hit': False,
+                'tp2_hit': False
             }
             del st.session_state.pending_orders[symbol]
             save_data() 
@@ -259,7 +281,9 @@ for symbol in SYMBOLS:
                 'tp1': tp1_price,
                 'tp2': tp2_price,
                 'sl': sl_price,
-                'mode': '🔥 Action'
+                'mode': '🔥 Action',
+                'tp1_hit': False,
+                'tp2_hit': False
             }
             save_data() 
             st.rerun()
