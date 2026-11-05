@@ -11,7 +11,7 @@ import os
 # 1. إعدادات الشاشة الأساسية والتحديث التلقائي (كل 15 ثانية)
 # ==========================================
 st.set_page_config(page_title="SMC Sniper Bot", layout="wide")
-st.title("🤖 SMC Sniper Bot - Paper Trading Simulator (Manual Removal Only)")
+st.title("🤖 SMC Sniper Bot - Paper Trading Simulator (Manual Control)")
 
 st_autorefresh(interval=15000, limit=None, key="auto_refresh")
 
@@ -112,7 +112,7 @@ def analyze_smc(df):
 st.sidebar.metric(label="💰 Realized Profits (Closed/TP1)", value=f"${st.session_state.realized_pnl:.2f}")
 
 # ==========================================
-# 5. محرك التداول وإدارة الأهداف (بدون حذف تلقائي)
+# 5. محرك التداول وإدارة الأهداف المحسّن
 # ==========================================
 st.subheader("📊 Live Market Scanner & Portfolio (Manual Control)")
 col1, col2 = st.columns(2)
@@ -154,13 +154,17 @@ with col1:
             tp2_reached = live_price <= trade['tp2']
             tp1_reached = live_price <= trade['tp1']
 
-        # رصد الأهداف وتحديث الحالة والباقي يظل ظاهراً ولا يتم الحذف أبداً إلا بضغط المستخدم
+        # رصد الأهداف وتحديث المحفظة (الهدف الأول والثاني يضيفان أرباحاً حقيقية)
         if tp2_reached and pnl_pct > 0:
-            trade['tp2_hit'] = True
-            trade['tp1_hit'] = True
-            trade['sl'] = trade['entry']
-            save_data()
-            status_msg = f"🚀 **تم ضرب الهدف الثاني (Target 2) لصفقة الـ {side}! الصفقة مستمرة ومثبتة حتى تقوم بحذفها بنفسك.**"
+            if not trade.get('tp2_hit', False):
+                # إضافة أرباح الهدف الثاني (النص الباقي 50%) للمحفظة
+                tp2_gain_pct = abs((trade['tp2'] - trade['entry']) / trade['entry']) * 100
+                st.session_state.realized_pnl += (tp2_gain_pct * 0.5)
+                trade['tp2_hit'] = True
+                trade['tp1_hit'] = True
+                trade['sl'] = trade['entry']
+                save_data()
+            status_msg = f"🚀 **تم ضرب الهدف الثاني (Target 2) لصفقة الـ {side} وإضافة باقي الأرباح للمحفظة! مستمرة لحين حذفها.**"
         elif tp1_reached and pnl_pct > 0:
             if not trade.get('tp1_hit', False):
                 tp1_gain_pct = abs((trade['tp1'] - trade['entry']) / trade['entry']) * 100
@@ -186,12 +190,11 @@ with col1:
             - **Live Price:** ${live_price:.4f}
             - **Total PnL:** {pnl_text}
             - **🎯 Target 1:** ${trade['tp1']:.4f} {"(✅ TP1 Hit & Secured)" if trade.get('tp1_hit') and pnl_pct > 0 else ""}
-            - **🚀 Target 2:** ${trade['tp2']:.4f} {"(🚀 Hit)" if trade.get('tp2_hit') and pnl_pct > 0 else ""}
+            - **🚀 Target 2:** ${trade['tp2']:.4f} {"(🚀 TP2 Hit & Added)" if trade.get('tp2_hit') and pnl_pct > 0 else ""}
             - <span style='color:#ff4b4b'>**🛑 Stop Loss:** ${trade['sl']:.4f}</span>
             """, unsafe_allow_html=True)
             
             st.markdown("---")
-            # زر الحذف اليدوي الوحيد
             if st.button(f"Remove {sym} (Manual)", key=f"remove_active_{sym}"):
                 del st.session_state.active_trades[sym]
                 save_data()  
