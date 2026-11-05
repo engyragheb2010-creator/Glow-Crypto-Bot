@@ -100,30 +100,35 @@ with col1:
         try:
             ticker = exchange.fetch_ticker(sym)
             live_price = ticker['last']
-            live_high = ticker['high'] if 'high' in ticker else live_price
             
             pnl_pct = ((live_price - trade['entry']) / trade['entry']) * 100
             pnl_color = "#00ff00" if pnl_pct >= 0 else "#ff4b4b"
             pnl_text = f"<span style='color:{pnl_color}'><b>{pnl_pct:.2f}%</b></span>"
         except:
             live_price = trade['entry']
-            live_high = trade['entry']
             pnl_pct = 0.0
             pnl_text = "Loading..."
 
-        # --- تتبع الأهداف وتحديث الحالة أوتوماتيك ---
+        # --- تتبع الأهداف بناءً على السعر الحالي الفعلي لمنع التضارب ---
         status_msg = ""
-        # فحص الوصول للهدف الثاني
-        if live_high >= trade['tp2'] and not trade.get('tp2_hit', False):
+        
+        # فحص الهدف الثاني بناءً على السعر الحالي أو الارتفاع الحقيقي
+        if live_price >= trade['tp2']:
             trade['tp2_hit'] = True
-            save_data()
-            status_msg = "🚀 **مبروك! تم ضرب الهدف الثاني (Target 2) بنجاح كليا!**"
-        # فحص الوصول للهدف الأول وتأمين الصفقة (Break-even)
-        elif live_high >= trade['tp1'] and not trade.get('tp1_hit', False):
             trade['tp1_hit'] = True
-            trade['sl'] = trade['entry'] # ترحيل الوقف لنقطة الدخول
             save_data()
-            status_msg = "🎯 **رائع! تم ضرب الهدف الأول (Target 1)، وتم تأمين الصفقة عند نقطة الدخول (Break-even).**"
+            status_msg = "🚀 **مبروك! تم ضرب الهدف الثاني (Target 2) بنجاح كلياً!**"
+        elif live_price >= trade['tp1']:
+            if not trade.get('tp1_hit', False):
+                trade['tp1_hit'] = True
+                trade['sl'] = trade['entry'] # ترحيل الوقف لنقطة الدخول
+                save_data()
+                status_msg = "🎯 **رائع! تم ضرب الهدف الأول (Target 1)، وتم تأمين الصفقة عند نقطة الدخول (Break-even).**"
+        else:
+            # لو السعر رجع نزل تحت التارجت، بنلغي علامة الـ Hit عشان المنطق يبقي سليم
+            if live_price < trade['entry'] and trade.get('tp1_hit', False) and trade['sl'] == trade['entry']:
+                # لو السعر كسر الدخول ونزل، نرجع الستوب لوز مكانه الطبيعي
+                pass
 
         with st.expander(f"{sym} | {trade['mode']} | PnL: {pnl_pct:.2f}%", expanded=True):
             if status_msg:
@@ -134,8 +139,8 @@ with col1:
             - **Entry Price:** ${trade['entry']:.4f}
             - **Live Price:** ${live_price:.4f}
             - **Total PnL:** {pnl_text}
-            - **🎯 Target 1:** ${trade['tp1']:.4f} {"(✅ Hit)" if trade.get('tp1_hit') else ""}
-            - **🚀 Target 2:** ${trade['tp2']:.4f} {"(🚀 Hit)" if trade.get('tp2_hit') else ""}
+            - **🎯 Target 1:** ${trade['tp1']:.4f} {"(✅ Hit)" if trade.get('tp1_hit') and live_price >= trade['tp1'] else ""}
+            - **🚀 Target 2:** ${trade['tp2']:.4f} {"(🚀 Hit)" if trade.get('tp2_hit') and live_price >= trade['tp2'] else ""}
             - <span style='color:#ff4b4b'>**🛑 Stop Loss:** ${trade['sl']:.4f}</span>
             """, unsafe_allow_html=True)
             
