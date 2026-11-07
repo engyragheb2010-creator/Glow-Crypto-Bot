@@ -6,12 +6,13 @@ import pandas_ta as ta
 import time
 import json
 import os
+from datetime import datetime
 
 # ==========================================
 # 1. إعدادات الشاشة الأساسية والتحديث التلقائي
 # ==========================================
 st.set_page_config(page_title="SMC Sniper Bot", layout="wide")
-st.title("🤖 SMC Sniper Bot - Instant Entry Mode (English Status)")
+st.title("🤖 SMC Sniper Bot - Instant & Timestamps Archive")
 
 st_autorefresh(interval=15000, limit=None, key="auto_refresh")
 
@@ -30,12 +31,13 @@ def load_data():
             with open(DATA_FILE, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except:
-            return {'active_trades': {}, 'realized_pnl': 0.0}
-    return {'active_trades': {}, 'realized_pnl': 0.0}
+            return {'active_trades': {}, 'closed_trades': [], 'realized_pnl': 0.0}
+    return {'active_trades': {}, 'closed_trades': [], 'realized_pnl': 0.0}
 
 def save_data():
     data = {
         'active_trades': st.session_state.active_trades,
+        'closed_trades': st.session_state.closed_trades,
         'realized_pnl': st.session_state.realized_pnl
     }
     try:
@@ -47,6 +49,7 @@ def save_data():
 if 'data_loaded' not in st.session_state:
     saved_data = load_data()
     st.session_state.active_trades = saved_data.get('active_trades', {})
+    st.session_state.closed_trades = saved_data.get('closed_trades', [])
     st.session_state.realized_pnl = saved_data.get('realized_pnl', 0.0)
     st.session_state.data_loaded = True
 
@@ -61,7 +64,7 @@ except Exception as e:
     st.error(f"Error connecting to OKX: {e}")
 
 # ==========================================
-# 4. دوال التحليل الفني (SMC, ATR & Trend Filter)
+# 4. دوال التحليل الفني وحساب المدة
 # ==========================================
 def fetch_data(symbol, timeframe, limit=100):
     try:
@@ -102,19 +105,32 @@ def analyze_smc(df):
         
     return 'NONE', 0.0
 
+def format_duration(seconds):
+    mins = int(seconds // 60)
+    hours = mins // 60
+    mins = mins % 60
+    days = hours // 24
+    hours = hours % 24
+    if days > 0:
+        return f"{days}d {hours}h {mins}m"
+    elif hours > 0:
+        return f"{hours}h {mins}m"
+    else:
+        return f"{mins} mins"
+
 # ==========================================
 # عرض إجمالي الأرباح المحققة (Realized PnL)
 # ==========================================
 st.sidebar.metric(label="💰 Realized Profits (Closed/TP1)", value=f"${st.session_state.realized_pnl:.2f}")
 
 # ==========================================
-# 5. محرك التداول وإدارة الأهداف (Instant Entry Modes)
+# 5. صفقات التداول النشطة
 # ==========================================
-st.subheader("📊 Live Market Scanner & Portfolio (Instant Entry)")
+st.subheader("📊 Live Market Scanner & Active Portfolio")
 
 st.markdown("### 🟢 Active Trades (Persistent)")
 if not st.session_state.active_trades:
-    st.info("No active trades yet. Scanning for 1h and 15m instant signals...")
+    st.info("No active trades yet. Scanning for instant signals...")
     
 for sym, trade in list(st.session_state.active_trades.items()):
     try:
@@ -138,6 +154,9 @@ for sym, trade in list(st.session_state.active_trades.items()):
     if 'original_sl' not in trade:
         trade['original_sl'] = trade['sl']
 
+    open_ts = trade.get('open_timestamp', time.time())
+    current_duration = format_duration(time.time() - open_ts)
+
     side_badge = "🟢 BUY" if side == 'BUY' else "🔴 SELL"
     status_msg = ""
     
@@ -156,7 +175,7 @@ for sym, trade in list(st.session_state.active_trades.items()):
             trade['tp1_hit'] = True
             trade['sl'] = trade['entry']
             save_data()
-        status_msg = "🚀 **Target 2 Hit (Won)** - Remaining profit added to wallet! Trade remains active until manual removal."
+        status_msg = "🚀 **Target 2 Hit (Won)** - Remaining profit added to wallet!"
     elif tp1_reached and pnl_pct > 0:
         if not trade.get('tp1_hit', False):
             tp1_gain_pct = abs((trade['tp1'] - trade['entry']) / trade['entry']) * 100
@@ -164,7 +183,7 @@ for sym, trade in list(st.session_state.active_trades.items()):
             trade['tp1_hit'] = True
             trade['sl'] = trade['entry']  
             save_data()
-        status_msg = "🎯 **Target 1 Hit & Profit Secured** - First half profit taken and trade secured at entry. Active until removed."
+        status_msg = "🎯 **Target 1 Hit & Profit Secured** - First half profit taken and trade secured."
     else:
         if not trade.get('tp1_hit', False):
             trade['tp1_hit'] = False
@@ -181,6 +200,8 @@ for sym, trade in list(st.session_state.active_trades.items()):
         - **Entry Price:** ${trade['entry']:.4f}
         - **Live Price:** ${live_price:.4f}
         - **Total PnL:** {pnl_text}
+        - **🕒 Open Time:** {trade.get('open_time', 'N/A')}
+        - **⏳ Running Duration:** {current_duration}
         - **🎯 Target 1:** ${trade['tp1']:.4f} {"(✅ Target 1 Hit & Secured)" if trade.get('tp1_hit') and pnl_pct > 0 else ""}
         - **🚀 Target 2:** ${trade['tp2']:.4f} {"(🚀 Target 2 Hit / Won)" if trade.get('tp2_hit') and pnl_pct > 0 else ""}
         - <span style='color:#ff4b4b'>**🛑 Stop Loss:** ${trade['sl']:.4f}</span>
@@ -188,6 +209,23 @@ for sym, trade in list(st.session_state.active_trades.items()):
         
         st.markdown("---")
         if st.button(f"Remove {sym} (Manual)", key=f"remove_active_{sym}"):
+            close_dt = datetime.now()
+            close_time_str = close_dt.strftime('%Y-%m-%d %I:%M:%S %p (%A)')
+            duration_sec = time.time() - open_ts
+            
+            closed_trade_record = {
+                'symbol': sym,
+                'side': side,
+                'mode': trade['mode'],
+                'entry': trade['entry'],
+                'close_price': live_price,
+                'final_pnl': pnl_pct,
+                'open_time': trade.get('open_time', 'N/A'),
+                'close_time': close_time_str,
+                'duration': format_duration(duration_sec)
+            }
+            st.session_state.closed_trades.append(closed_trade_record)
+            
             del st.session_state.active_trades[sym]
             save_data()
             st.rerun()
@@ -195,7 +233,30 @@ for sym, trade in list(st.session_state.active_trades.items()):
 st.markdown("---")
 
 # ==========================================
-# 6. رادار السوق ولوب فحص الفرص (دخول فوري للـ Pro والـ Action)
+# 6. أرشيف الصفقات المغلقة (Closed Trades History)
+# ==========================================
+st.subheader("📁 Closed Trades History & Timestamps Archive")
+if not st.session_state.closed_trades:
+    st.info("No closed trades in history yet.")
+else:
+    for idx, ct in enumerate(reversed(st.session_state.closed_trades)):
+        pnl_color = "#00ff00" if ct['final_pnl'] >= 0 else "#ff4b4b"
+        with st.expander(f"Closed: {ct['symbol']} | {ct['side']} | PnL: {ct['final_pnl']:.2f}%"):
+            st.markdown(f"""
+            - **Side:** {ct['side']}
+            - **Mode:** {ct['mode']}
+            - **Entry Price:** ${ct['entry']:.4f}
+            - **Close Price:** ${ct['close_price']:.4f}
+            - **Final PnL:** <span style='color:{pnl_color}'><b>{ct['final_pnl']:.2f}%</b></span>
+            - **📥 Opened At:** {ct['open_time']}
+            - **📤 Closed At:** {ct['close_time']}
+            - **⏱️ Total Duration:** {ct['duration']}
+            """, unsafe_allow_html=True)
+
+st.markdown("---")
+
+# ==========================================
+# 7. رادار السوق ولوب فحص الفرص
 # ==========================================
 st.markdown("### 📡 Market Radar (Live Scanner)")
 market_radar_data = []
@@ -233,8 +294,9 @@ for symbol in SYMBOLS:
         continue
 
     effective_atr_15m = atr_15m if atr_15m > 0 else (current_price * 0.01)
+    now_str = datetime.now().strftime('%Y-%m-%d %I:%M:%S %p')
 
-    # 1. فحص إشارات الـ Pro (فريم الساعة) - دخول فوري من السعر الحالي
+    # 1. إشارات Pro الفورية
     if signal_1h in ['BUY', 'SELL'] and symbol not in st.session_state.active_trades:
         try:
             min_target_pct = 0.015
@@ -258,6 +320,8 @@ for symbol in SYMBOLS:
                 'original_sl': sl_price,
                 'mode': '🎯 Pro (Instant)',
                 'side': side,
+                'open_time': now_str,
+                'open_timestamp': time.time(),
                 'tp1_hit': False,
                 'tp2_hit': False
             }
@@ -266,7 +330,7 @@ for symbol in SYMBOLS:
         except Exception as e:
             st.error(f"Error placing Pro Instant order: {e}")
 
-    # 2. فحص صفقات الـ Action الفورية (فريم 15 دقيقة)
+    # 2. صفقات Action الفورية
     elif signal_15m in ['BUY', 'SELL'] and symbol not in st.session_state.active_trades:
         try:
             min_target_pct = 0.015 
@@ -289,6 +353,8 @@ for symbol in SYMBOLS:
                 'original_sl': sl_price,
                 'mode': '🔥 Action',
                 'side': side,
+                'open_time': now_str,
+                'open_timestamp': time.time(),
                 'tp1_hit': False,
                 'tp2_hit': False
             }
