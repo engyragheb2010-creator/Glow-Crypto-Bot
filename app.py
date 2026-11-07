@@ -233,14 +233,17 @@ for sym, trade in list(st.session_state.active_trades.items()):
 st.markdown("---")
 
 # ==========================================
-# 6. أرشيف الصفقات المغلقة (Closed Trades History)
+# 6. أرشيف الصفقات المغلقة (Closed Trades History with Individual Delete)
 # ==========================================
 st.subheader("📁 Closed Trades History & Timestamps Archive")
 if not st.session_state.closed_trades:
     st.info("No closed trades in history yet.")
 else:
-    for idx, ct in enumerate(reversed(st.session_state.closed_trades)):
+    # عرض الصفقات من الأحدث للأقدم مع زرار حذف خاص بكل صفقة
+    for idx, ct in enumerate(reversed(list(st.session_state.closed_trades))):
+        original_index = len(st.session_state.closed_trades) - 1 - idx
         pnl_color = "#00ff00" if ct['final_pnl'] >= 0 else "#ff4b4b"
+        
         with st.expander(f"Closed: {ct['symbol']} | {ct['side']} | PnL: {ct['final_pnl']:.2f}%"):
             st.markdown(f"""
             - **Side:** {ct['side']}
@@ -252,6 +255,12 @@ else:
             - **📤 Closed At:** {ct['close_time']}
             - **⏱️ Total Duration:** {ct['duration']}
             """, unsafe_allow_html=True)
+            
+            st.markdown("---")
+            if st.button(f"Remove from History", key=f"remove_closed_{original_index}"):
+                st.session_state.closed_trades.pop(original_index)
+                save_data()
+                st.rerun()
 
 st.markdown("---")
 
@@ -339,7 +348,7 @@ for symbol in SYMBOLS:
             if side == 'BUY':
                 tp1_price = current_price + max(effective_atr_15m * 1.5, current_price * min_target_pct)
                 tp2_price = current_price + max(effective_atr_15m * 3.0, current_price * (min_target_pct * 2))
-                sl_price = current_price - effective_atr_15m * 1.5
+                sl_pid = current_price - effective_atr_15m * 1.5
             else: 
                 tp1_price = current_price - max(effective_atr_15m * 1.5, current_price * min_target_pct)
                 tp2_price = current_price - max(effective_atr_15m * 3.0, current_price * (min_target_pct * 2))
