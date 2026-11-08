@@ -12,7 +12,7 @@ from datetime import datetime
 # 1. إعدادات الشاشة الأساسية والتحديث التلقائي
 # ==========================================
 st.set_page_config(page_title="SMC Sniper Bot", layout="wide")
-st.title("🤖 SMC Sniper Bot - Instant & Timestamps Archive")
+st.title("🤖 SMC Sniper Bot - PnL (Profit & Loss Tracking)")
 
 st_autorefresh(interval=15000, limit=None, key="auto_refresh")
 
@@ -119,9 +119,11 @@ def format_duration(seconds):
         return f"{mins} mins"
 
 # ==========================================
-# عرض إجمالي الأرباح المحققة (Realized PnL)
+# عرض إجمالي الأرباح والخسائر المحققة (Realized PnL)
 # ==========================================
-st.sidebar.metric(label="💰 Realized Profits (Closed/TP1)", value=f"${st.session_state.realized_pnl:.2f}")
+pnl_color_sidebar = "#00ff00" if st.session_state.realized_pnl >= 0 else "#ff4b4b"
+st.sidebar.markdown(f"### 💰 Realized PnL")
+st.sidebar.markdown(f"<h2 style='color:{pnl_color_sidebar}; margin-top:-15px;'>${st.session_state.realized_pnl:.2f}</h2>", unsafe_allow_html=True)
 
 # ==========================================
 # 5. صفقات التداول النشطة
@@ -213,6 +215,10 @@ for sym, trade in list(st.session_state.active_trades.items()):
             close_time_str = close_dt.strftime('%Y-%m-%d %I:%M:%S %p (%A)')
             duration_sec = time.time() - open_ts
             
+            # حساب الخسارة أو الربح عند الإغلاق اليدوي وتحديث المحفظة
+            if pnl_pct < 0:
+                st.session_state.realized_pnl += pnl_pct  # خصم الخسارة
+            
             closed_trade_record = {
                 'symbol': sym,
                 'side': side,
@@ -233,13 +239,12 @@ for sym, trade in list(st.session_state.active_trades.items()):
 st.markdown("---")
 
 # ==========================================
-# 6. أرشيف الصفقات المغلقة (Closed Trades History with Individual Delete)
+# 6. أرشيف الصفقات المغلقة (Closed Trades History)
 # ==========================================
 st.subheader("📁 Closed Trades History & Timestamps Archive")
 if not st.session_state.closed_trades:
     st.info("No closed trades in history yet.")
 else:
-    # عرض الصفقات من الأحدث للأقدم مع زرار حذف خاص بكل صفقة
     for idx, ct in enumerate(reversed(list(st.session_state.closed_trades))):
         original_index = len(st.session_state.closed_trades) - 1 - idx
         pnl_color = "#00ff00" if ct['final_pnl'] >= 0 else "#ff4b4b"
@@ -348,7 +353,7 @@ for symbol in SYMBOLS:
             if side == 'BUY':
                 tp1_price = current_price + max(effective_atr_15m * 1.5, current_price * min_target_pct)
                 tp2_price = current_price + max(effective_atr_15m * 3.0, current_price * (min_target_pct * 2))
-                sl_pid = current_price - effective_atr_15m * 1.5
+                sl_price = current_price - effective_atr_15m * 1.5
             else: 
                 tp1_price = current_price - max(effective_atr_15m * 1.5, current_price * min_target_pct)
                 tp2_price = current_price - max(effective_atr_15m * 3.0, current_price * (min_target_pct * 2))
