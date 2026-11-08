@@ -12,7 +12,7 @@ from datetime import datetime
 # 1. إعدادات الشاشة الأساسية والتحديث التلقائي
 # ==========================================
 st.set_page_config(page_title="SMC Sniper Bot", layout="wide")
-st.title("🤖 SMC Sniper Bot - Split Targets & PnL Tracking")
+st.title("🤖 SMC Sniper Bot - Cooldown & Split Targets")
 
 st_autorefresh(interval=15000, limit=None, key="auto_refresh")
 
@@ -31,13 +31,14 @@ def load_data():
             with open(DATA_FILE, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except:
-            return {'active_trades': {}, 'closed_trades': [], 'realized_pnl': 0.0}
-    return {'active_trades': {}, 'closed_trades': [], 'realized_pnl': 0.0}
+            return {'active_trades': {}, 'closed_trades': [], 'cooldowns': {}, 'realized_pnl': 0.0}
+    return {'active_trades': {}, 'closed_trades': [], 'cooldowns': {}, 'realized_pnl': 0.0}
 
 def save_data():
     data = {
         'active_trades': st.session_state.active_trades,
         'closed_trades': st.session_state.closed_trades,
+        'cooldowns': st.session_state.cooldowns,
         'realized_pnl': st.session_state.realized_pnl
     }
     try:
@@ -50,6 +51,7 @@ if 'data_loaded' not in st.session_state:
     saved_data = load_data()
     st.session_state.active_trades = saved_data.get('active_trades', {})
     st.session_state.closed_trades = saved_data.get('closed_trades', [])
+    st.session_state.cooldowns = saved_data.get('cooldowns', {}) # وقت راحة العملات
     st.session_state.realized_pnl = saved_data.get('realized_pnl', 0.0)
     st.session_state.data_loaded = True
 
@@ -169,16 +171,14 @@ for sym, trade in list(st.session_state.active_trades.items()):
         tp2_reached = live_price <= trade['tp2']
         tp1_reached = live_price <= trade['tp1']
 
-    # التحقق من الأهداف وتطبيق حساب 50% لكل تارجت بدقة
+    # حساب الـ 50% لكل تارجت
     if tp2_reached and pnl_pct > 0:
         if not trade.get('tp2_hit', False):
-            # التأكد من حساب TP1 أولاً لو لم يتم حسابه
             if not trade.get('tp1_hit', False):
                 tp1_gain_pct = abs((trade['tp1'] - trade['entry']) / trade['entry']) * 100
                 st.session_state.realized_pnl += (tp1_gain_pct * 0.5)
                 trade['tp1_hit'] = True
             
-            # حساب نسبة الـ 50% الخاصة بـ TP2 (الفرق بين TP2 و TP1 أو نسبته الكاملة مطروحاً منها الجزء الأول)
             tp2_full_pct = abs((trade['tp2'] - trade['entry']) / trade['entry']) * 100
             tp2_gain_pct = (tp2_full_pct * 0.5)
             st.session_state.realized_pnl += tp2_gain_pct
@@ -191,7 +191,7 @@ for sym, trade in list(st.session_state.active_trades.items()):
     elif tp1_reached and pnl_pct > 0:
         if not trade.get('tp1_hit', False):
             tp1_gain_pct = abs((trade['tp1'] - trade['entry']) / trade['entry']) * 100
-            st.session_state.realized_pnl += (tp1_gain_pct * 0.5)  # إضافة 50% من أرباح الهدف الأول
+            st.session_state.realized_pnl += (tp1_gain_pct * 0.5)
             trade['tp1_hit'] = True
             trade['sl'] = trade['entry']  
             save_data()
@@ -225,7 +225,6 @@ for sym, trade in list(st.session_state.active_trades.items()):
             close_time_str = close_dt.strftime('%Y-%m-%d %I:%M:%S %p (%A)')
             duration_sec = time.time() - open_ts
             
-            # لو الصفقة اتقفلت يدوياً وهي لسه مأضربتش الأهداف كاملة أو كسبت/خسرت بشكل حر
             if not trade.get('tp1_hit', False) and not trade.get('tp2_hit', False):
                 st.session_state.realized_pnl += pnl_pct
             
@@ -241,6 +240,9 @@ for sym, trade in list(st.session_state.active_trades.items()):
                 'duration': format_duration(duration_sec)
             }
             st.session_state.closed_trades.append(closed_trade_record)
+            
+            # تفعيل فترة راحة (Cooldown) للعملة لمدة 30 دقيقة بعد الإغلاق
+            st.session_state.cooldowns[sym] = time.time() + (30 * 60)
             
             del st.session_state.active_trades[sym]
             save_data()
@@ -280,10 +282,12 @@ else:
 st.markdown("---")
 
 # ==========================================
-# 7. رادار السوق ولوب فحص الفرص
+# 7. رادار السوق ولوب فحص الفرص (مع تطبيق Resting Cooldown)
 # ==========================================
 st.markdown("### 📡 Market Radar (Live Scanner)")
 market_radar_data = []
+
+current_time_epoch = time.time()
 
 for symbol in SYMBOLS:
     df_1h = fetch_data(symbol, '1h')
@@ -301,8 +305,12 @@ for symbol in SYMBOLS:
     atr_val = float(raw_atr) if (raw_atr is not None and not pd.isna(raw_atr)) else 0.0
     atr_display = f"{atr_val:.4f}" if atr_val > 0 else f"{(current_price * 0.01):.4f}"
 
+    # تحديد الحالة (نشطة، في فترة راحة، أو تبحث عن فرص)
     if symbol in st.session_state.active_trades:
         status = "🟢 Active Trade"
+    elif symbol in st.session_state.cooldowns and current_time_epoch < st.session_state.cooldowns[symbol]:
+        remaining_mins = int((st.session_state.cooldowns[symbol] - current_time_epoch) // 60)
+        status = f"🛌 Resting ({remaining_mins}m left)"
     else:
         status = "👀 Scanning..."
 
@@ -314,14 +322,17 @@ for symbol in SYMBOLS:
         "Status": status
     })
 
+    # شروط تخطي الفحص لو العملة نشطة أو في فترة راحة
     if symbol in st.session_state.active_trades:
+        continue
+    if symbol in st.session_state.cooldowns and current_time_epoch < st.session_state.cooldowns[symbol]:
         continue
 
     effective_atr_15m = atr_15m if atr_15m > 0 else (current_price * 0.01)
     now_str = datetime.now().strftime('%Y-%m-%d %I:%M:%S %p')
 
     # 1. إشارات Pro الفورية
-    if signal_1h in ['BUY', 'SELL'] and symbol not in st.session_state.active_trades:
+    if signal_1h in ['BUY', 'SELL']:
         try:
             min_target_pct = 0.015
             side = signal_1h
@@ -355,7 +366,7 @@ for symbol in SYMBOLS:
             st.error(f"Error placing Pro Instant order: {e}")
 
     # 2. صفقات Action الفورية
-    elif signal_15m in ['BUY', 'SELL'] and symbol not in st.session_state.active_trades:
+    elif signal_15m in ['BUY', 'SELL']:
         try:
             min_target_pct = 0.015 
             side = signal_15m
