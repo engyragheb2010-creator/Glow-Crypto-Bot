@@ -12,7 +12,7 @@ from datetime import datetime
 # 1. إعدادات الشاشة الأساسية والتحديث التلقائي
 # ==========================================
 st.set_page_config(page_title="SMC Sniper Bot", layout="wide")
-st.title("🤖 SMC Sniper Bot - Cooldown & Split Targets")
+st.title("🤖 SMC Sniper Bot - 1h Cooldown & Split Targets")
 
 st_autorefresh(interval=15000, limit=None, key="auto_refresh")
 
@@ -30,7 +30,6 @@ def load_data():
         try:
             with open(DATA_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                # لو الملف فيه realized_pnl بصفر أو اقل وعايزين نثبته، أو نقراه
                 if 'realized_pnl' not in data:
                     data['realized_pnl'] = 18.75
                 return data
@@ -57,7 +56,6 @@ if 'data_loaded' not in st.session_state:
     st.session_state.closed_trades = saved_data.get('closed_trades', [])
     st.session_state.cooldowns = saved_data.get('cooldowns', {})
     
-    # فرض القيمة لو كانت صفر أو أقل لتثبيتها عند 18.75 أول مرة
     loaded_pnl = saved_data.get('realized_pnl', 18.75)
     st.session_state.realized_pnl = loaded_pnl if loaded_pnl != 0.0 else 18.75
     
@@ -129,18 +127,11 @@ def format_duration(seconds):
         return f"{mins} mins"
 
 # ==========================================
-# عرض إجمالي الأرباح والخسائر المحققة (Realized PnL) + زرار تثبيت الرصيد
+# عرض إجمالي الأرباح والخسائر المحققة (Realized PnL)
 # ==========================================
 pnl_color_sidebar = "#00ff00" if st.session_state.realized_pnl >= 0 else "#ff4b4b"
 st.sidebar.markdown(f"### 💰 Realized PnL")
 st.sidebar.markdown(f"<h2 style='color:{pnl_color_sidebar}; margin-top:-15px;'>${st.session_state.realized_pnl:.2f}</h2>", unsafe_allow_html=True)
-
-st.sidebar.markdown("---")
-if st.sidebar.button("⚙️ Force Set Balance to $18.75"):
-    st.session_state.realized_pnl = 18.75
-    save_data()
-    st.success("Balance fixed to $18.75!")
-    st.rerun()
 
 # ==========================================
 # 5. صفقات التداول النشطة وإدارة الأهداف بدقة
@@ -255,7 +246,8 @@ for sym, trade in list(st.session_state.active_trades.items()):
             }
             st.session_state.closed_trades.append(closed_trade_record)
             
-            st.session_state.cooldowns[sym] = time.time() + (30 * 60)
+            # فترة راحة لمدة ساعة كاملة (60 دقيقة) بعد إغلاق الصفقة
+            st.session_state.cooldowns[sym] = time.time() + (60 * 60)
             
             del st.session_state.active_trades[sym]
             save_data()
