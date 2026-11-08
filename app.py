@@ -12,7 +12,7 @@ from datetime import datetime
 # 1. إعدادات الشاشة الأساسية والتحديث التلقائي
 # ==========================================
 st.set_page_config(page_title="SMC Sniper Bot", layout="wide")
-st.title("🤖 SMC Sniper Bot - PnL (Profit & Loss Tracking)")
+st.title("🤖 SMC Sniper Bot - Split Targets & PnL Tracking")
 
 st_autorefresh(interval=15000, limit=None, key="auto_refresh")
 
@@ -126,7 +126,7 @@ st.sidebar.markdown(f"### 💰 Realized PnL")
 st.sidebar.markdown(f"<h2 style='color:{pnl_color_sidebar}; margin-top:-15px;'>${st.session_state.realized_pnl:.2f}</h2>", unsafe_allow_html=True)
 
 # ==========================================
-# 5. صفقات التداول النشطة
+# 5. صفقات التداول النشطة وإدارة الأهداف بدقة
 # ==========================================
 st.subheader("📊 Live Market Scanner & Active Portfolio")
 
@@ -169,25 +169,35 @@ for sym, trade in list(st.session_state.active_trades.items()):
         tp2_reached = live_price <= trade['tp2']
         tp1_reached = live_price <= trade['tp1']
 
+    # التحقق من الأهداف وتطبيق حساب 50% لكل تارجت بدقة
     if tp2_reached and pnl_pct > 0:
         if not trade.get('tp2_hit', False):
-            tp2_gain_pct = abs((trade['tp2'] - trade['entry']) / trade['entry']) * 100
-            st.session_state.realized_pnl += (tp2_gain_pct * 0.5)
+            # التأكد من حساب TP1 أولاً لو لم يتم حسابه
+            if not trade.get('tp1_hit', False):
+                tp1_gain_pct = abs((trade['tp1'] - trade['entry']) / trade['entry']) * 100
+                st.session_state.realized_pnl += (tp1_gain_pct * 0.5)
+                trade['tp1_hit'] = True
+            
+            # حساب نسبة الـ 50% الخاصة بـ TP2 (الفرق بين TP2 و TP1 أو نسبته الكاملة مطروحاً منها الجزء الأول)
+            tp2_full_pct = abs((trade['tp2'] - trade['entry']) / trade['entry']) * 100
+            tp2_gain_pct = (tp2_full_pct * 0.5)
+            st.session_state.realized_pnl += tp2_gain_pct
+            
             trade['tp2_hit'] = True
-            trade['tp1_hit'] = True
             trade['sl'] = trade['entry']
             save_data()
-        status_msg = "🚀 **Target 2 Hit (Won)** - Remaining profit added to wallet!"
+        status_msg = "🚀 **Target 2 Hit (Won)** - Remaining 50% profit added to wallet!"
+        
     elif tp1_reached and pnl_pct > 0:
         if not trade.get('tp1_hit', False):
             tp1_gain_pct = abs((trade['tp1'] - trade['entry']) / trade['entry']) * 100
-            st.session_state.realized_pnl += (tp1_gain_pct * 0.5) 
+            st.session_state.realized_pnl += (tp1_gain_pct * 0.5)  # إضافة 50% من أرباح الهدف الأول
             trade['tp1_hit'] = True
             trade['sl'] = trade['entry']  
             save_data()
-        status_msg = "🎯 **Target 1 Hit & Profit Secured** - First half profit taken and trade secured."
+        status_msg = "🎯 **Target 1 Hit & Profit Secured** - First 50% profit taken and trade secured at entry."
     else:
-        if not trade.get('tp1_hit', False):
+        if not trade.get('tp1_hit', False) and not trade.get('tp2_hit', False):
             trade['tp1_hit'] = False
             trade['tp2_hit'] = False
             trade['sl'] = trade['original_sl']
@@ -204,8 +214,8 @@ for sym, trade in list(st.session_state.active_trades.items()):
         - **Total PnL:** {pnl_text}
         - **🕒 Open Time:** {trade.get('open_time', 'N/A')}
         - **⏳ Running Duration:** {current_duration}
-        - **🎯 Target 1:** ${trade['tp1']:.4f} {"(✅ Target 1 Hit & Secured)" if trade.get('tp1_hit') and pnl_pct > 0 else ""}
-        - **🚀 Target 2:** ${trade['tp2']:.4f} {"(🚀 Target 2 Hit / Won)" if trade.get('tp2_hit') and pnl_pct > 0 else ""}
+        - **🎯 Target 1 (50%):** ${trade['tp1']:.4f} {"(✅ Target 1 Hit & Secured)" if trade.get('tp1_hit') else ""}
+        - **🚀 Target 2 (50%):** ${trade['tp2']:.4f} {"(🚀 Target 2 Hit / Won)" if trade.get('tp2_hit') else ""}
         - <span style='color:#ff4b4b'>**🛑 Stop Loss:** ${trade['sl']:.4f}</span>
         """, unsafe_allow_html=True)
         
@@ -215,9 +225,9 @@ for sym, trade in list(st.session_state.active_trades.items()):
             close_time_str = close_dt.strftime('%Y-%m-%d %I:%M:%S %p (%A)')
             duration_sec = time.time() - open_ts
             
-            # حساب الخسارة أو الربح عند الإغلاق اليدوي وتحديث المحفظة
-            if pnl_pct < 0:
-                st.session_state.realized_pnl += pnl_pct  # خصم الخسارة
+            # لو الصفقة اتقفلت يدوياً وهي لسه مأضربتش الأهداف كاملة أو كسبت/خسرت بشكل حر
+            if not trade.get('tp1_hit', False) and not trade.get('tp2_hit', False):
+                st.session_state.realized_pnl += pnl_pct
             
             closed_trade_record = {
                 'symbol': sym,
