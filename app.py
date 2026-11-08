@@ -20,7 +20,7 @@ if st.button("🔄 Force Update Price / Refresh Now"):
     st.rerun()
 
 # ==========================================
-# 2. إعدادات الذاكرة الدائمة الآمنة (JSON)
+# 2. إعدادات الذاكرة الدائمة الآمنة (JSON) - تم ضبط الرصيد الافتراضي هنا على 18.75
 # ==========================================
 SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'LINK/USDT', 'NEAR/USDT', 'SUI/USDT', 'AVAX/USDT', 'ADA/USDT', 'XRP/USDT']
 DATA_FILE = 'trades_data.json'
@@ -31,8 +31,8 @@ def load_data():
             with open(DATA_FILE, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except:
-            return {'active_trades': {}, 'closed_trades': [], 'cooldowns': {}, 'realized_pnl': 0.0}
-    return {'active_trades': {}, 'closed_trades': [], 'cooldowns': {}, 'realized_pnl': 0.0}
+            return {'active_trades': {}, 'closed_trades': [], 'cooldowns': {}, 'realized_pnl': 18.75}
+    return {'active_trades': {}, 'closed_trades': [], 'cooldowns': {}, 'realized_pnl': 18.75}
 
 def save_data():
     data = {
@@ -51,8 +51,8 @@ if 'data_loaded' not in st.session_state:
     saved_data = load_data()
     st.session_state.active_trades = saved_data.get('active_trades', {})
     st.session_state.closed_trades = saved_data.get('closed_trades', [])
-    st.session_state.cooldowns = saved_data.get('cooldowns', {}) # وقت راحة العملات
-    st.session_state.realized_pnl = saved_data.get('realized_pnl', 0.0)
+    st.session_state.cooldowns = saved_data.get('cooldowns', {})
+    st.session_state.realized_pnl = saved_data.get('realized_pnl', 18.75)
     st.session_state.data_loaded = True
 
 # ==========================================
@@ -171,7 +171,6 @@ for sym, trade in list(st.session_state.active_trades.items()):
         tp2_reached = live_price <= trade['tp2']
         tp1_reached = live_price <= trade['tp1']
 
-    # حساب الـ 50% لكل تارجت
     if tp2_reached and pnl_pct > 0:
         if not trade.get('tp2_hit', False):
             if not trade.get('tp1_hit', False):
@@ -241,7 +240,6 @@ for sym, trade in list(st.session_state.active_trades.items()):
             }
             st.session_state.closed_trades.append(closed_trade_record)
             
-            # تفعيل فترة راحة (Cooldown) للعملة لمدة 30 دقيقة بعد الإغلاق
             st.session_state.cooldowns[sym] = time.time() + (30 * 60)
             
             del st.session_state.active_trades[sym]
@@ -282,7 +280,7 @@ else:
 st.markdown("---")
 
 # ==========================================
-# 7. رادار السوق ولوب فحص الفرص (مع تطبيق Resting Cooldown)
+# 7. رادار السوق ولوب فحص الفرص
 # ==========================================
 st.markdown("### 📡 Market Radar (Live Scanner)")
 market_radar_data = []
@@ -305,7 +303,6 @@ for symbol in SYMBOLS:
     atr_val = float(raw_atr) if (raw_atr is not None and not pd.isna(raw_atr)) else 0.0
     atr_display = f"{atr_val:.4f}" if atr_val > 0 else f"{(current_price * 0.01):.4f}"
 
-    # تحديد الحالة (نشطة، في فترة راحة، أو تبحث عن فرص)
     if symbol in st.session_state.active_trades:
         status = "🟢 Active Trade"
     elif symbol in st.session_state.cooldowns and current_time_epoch < st.session_state.cooldowns[symbol]:
@@ -322,7 +319,6 @@ for symbol in SYMBOLS:
         "Status": status
     })
 
-    # شروط تخطي الفحص لو العملة نشطة أو في فترة راحة
     if symbol in st.session_state.active_trades:
         continue
     if symbol in st.session_state.cooldowns and current_time_epoch < st.session_state.cooldowns[symbol]:
