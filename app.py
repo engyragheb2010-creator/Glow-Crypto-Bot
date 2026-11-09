@@ -12,7 +12,7 @@ from datetime import datetime
 # 1. إعدادات الشاشة الأساسية والتحديث التلقائي
 # ==========================================
 st.set_page_config(page_title="SMC Sniper Bot", layout="wide")
-st.title("🤖 SMC Sniper Bot - Status Close & Resting")
+st.title("🤖 SMC Sniper Bot - Clean Close & Resting")
 
 st_autorefresh(interval=15000, limit=None, key="auto_refresh")
 
@@ -134,7 +134,7 @@ st.sidebar.markdown(f"### 💰 Realized PnL")
 st.sidebar.markdown(f"<h2 style='color:{pnl_color_sidebar}; margin-top:-15px;'>${st.session_state.realized_pnl:.2f}</h2>", unsafe_allow_html=True)
 
 # ==========================================
-# 5. صفقات التداول النشطة (تظهر فيها حالة Close Trading عند اكتمالها مع تفعيل الراحة)
+# 5. صفقات التداول النشطة والمغلقة (بشكل مرتب ونظيف)
 # ==========================================
 st.subheader("📊 Live Market Scanner & Active Portfolio")
 
@@ -168,7 +168,6 @@ for sym, trade in list(st.session_state.active_trades.items()):
     current_duration = format_duration(time.time() - open_ts) if trade.get('open_timestamp') else "N/A"
 
     side_badge = "🟢 BUY" if side == 'BUY' else "🔴 SELL"
-    status_msg = ""
     
     if side == 'BUY':
         tp2_reached = live_price >= trade['tp2']
@@ -187,9 +186,8 @@ for sym, trade in list(st.session_state.active_trades.items()):
             trade['tp1_hit'] = True
             trade['sl'] = trade['entry']
             save_data()
-        status_msg = "🎯 **Target 1 Hit & Profit Secured** - First 50% profit taken and trade secured at entry."
 
-    # 2. إغلاق الصفقة أوتوماتيك وتحويل حالتها إلى Close Trading وتفعيل Resting بدون حذفها من الشاشة
+    # 2. إغلاق أوتوماتيك وتحويل للحالة المغلقة مع تفعيل الـ Resting
     if (tp2_reached and pnl_pct > 0 or sl_hit) and not trade.get('trade_closed', False):
         if tp2_reached:
             if not trade.get('tp2_hit', False):
@@ -206,22 +204,17 @@ for sym, trade in list(st.session_state.active_trades.items()):
                 st.session_state.realized_pnl += effective_sl_pnl
             trade['close_reason'] = "🛑 Stop Loss Hit"
 
-        # تسجيل الحالة كـ مغلقة وتفعيل فترة الراحة (Resting 1h)
         trade['trade_closed'] = True
         st.session_state.cooldowns[sym] = time.time() + (60 * 60)
         save_data()
 
-    # تحديد شكل العنوان والعرض بناءً على حالة الصفقة (نشطة ولا مغلقة)
+    # تصميم العنوان حسب حالة الصفقة
     if trade.get('trade_closed', False):
         header_title = f"🔴 CLOSE TRADING: {sym} | {side_badge} | {trade['close_reason']} | PnL: {pnl_pct:.2f}%"
-        status_msg = f"🔒 **Status: Close Trading ({trade['close_reason']})** - Trade entered 1h Resting mode. Click Remove whenever you like."
     else:
         header_title = f"{sym} | {side_badge} | {trade['mode']} | PnL: {pnl_pct:.2f}%"
 
     with st.expander(header_title, expanded=True):
-        if status_msg:
-            st.success(status_msg) if not trade.get('trade_closed', False) else st.warning(status_msg)
-            
         st.markdown(f"""
         - **Type / Side:** {side_badge}
         - **Mode:** {trade['mode']}
@@ -241,7 +234,6 @@ for sym, trade in list(st.session_state.active_trades.items()):
             close_time_str = close_dt.strftime('%Y-%m-%d %I:%M:%S %p (%A)')
             duration_sec = (time.time() - open_ts) if trade.get('open_timestamp') else 0
             
-            # لو الصفقة مكنتش اتقفلت أوتوماتيك قبل ما تتعملها Remove يدوي
             if trade.get('open_time', 'N/A') != 'N/A' and not trade.get('trade_closed', False):
                 if not trade.get('tp1_hit', False) and not trade.get('tp2_hit', False):
                     st.session_state.realized_pnl += pnl_pct
@@ -259,8 +251,6 @@ for sym, trade in list(st.session_state.active_trades.items()):
                 'duration': format_duration(duration_sec) if duration_sec > 0 else 'N/A'
             }
             st.session_state.closed_trades.append(closed_trade_record)
-            
-            # التأكد من تفعيل الراحة لو لسه ممتفعلتش
             st.session_state.cooldowns[sym] = time.time() + (60 * 60)
             
             del st.session_state.active_trades[sym]
@@ -325,7 +315,6 @@ for symbol in SYMBOLS:
     atr_display = f"{atr_val:.4f}" if atr_val > 0 else f"{(current_price * 0.01):.4f}"
 
     if symbol in st.session_state.active_trades:
-        # لو الصفقة موجودة بس حالتها مغلقة تظهر في الرادار كأنها في Resting
         if st.session_state.active_trades[symbol].get('trade_closed', False) or (symbol in st.session_state.cooldowns and current_time_epoch < st.session_state.cooldowns[symbol]):
             if symbol in st.session_state.cooldowns and current_time_epoch < st.session_state.cooldowns[symbol]:
                 remaining_mins = int((st.session_state.cooldowns[symbol] - current_time_epoch) // 60)
