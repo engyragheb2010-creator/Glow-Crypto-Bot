@@ -12,7 +12,7 @@ from datetime import datetime
 # 1. إعدادات الشاشة الأساسية والتحديث التلقائي
 # ==========================================
 st.set_page_config(page_title="SMC Sniper Bot", layout="wide")
-st.title("🤖 SMC Sniper Bot - Safe Removal & Cooldown")
+st.title("🤖 SMC Sniper Bot - Status Close & Resting")
 
 st_autorefresh(interval=15000, limit=None, key="auto_refresh")
 
@@ -134,7 +134,7 @@ st.sidebar.markdown(f"### 💰 Realized PnL")
 st.sidebar.markdown(f"<h2 style='color:{pnl_color_sidebar}; margin-top:-15px;'>${st.session_state.realized_pnl:.2f}</h2>", unsafe_allow_html=True)
 
 # ==========================================
-# 5. صفقات التداول النشطة وإدارة الأهداف بدقة
+# 5. صفقات التداول النشطة (تظهر فيها حالة Close Trading عند اكتمالها مع تفعيل الراحة)
 # ==========================================
 st.subheader("📊 Live Market Scanner & Active Portfolio")
 
@@ -173,43 +173,54 @@ for sym, trade in list(st.session_state.active_trades.items()):
     if side == 'BUY':
         tp2_reached = live_price >= trade['tp2']
         tp1_reached = live_price >= trade['tp1']
+        sl_hit = live_price <= trade['sl']
     else: 
         tp2_reached = live_price <= trade['tp2']
         tp1_reached = live_price <= trade['tp1']
+        sl_hit = live_price >= trade['sl']
 
-    if tp2_reached and pnl_pct > 0:
-        if not trade.get('tp2_hit', False):
-            if not trade.get('tp1_hit', False):
-                tp1_gain_pct = abs((trade['tp1'] - trade['entry']) / trade['entry']) * 100
-                st.session_state.realized_pnl += (tp1_gain_pct * 0.5)
-                trade['tp1_hit'] = True
-            
-            tp2_full_pct = abs((trade['tp2'] - trade['entry']) / trade['entry']) * 100
-            tp2_gain_pct = (tp2_full_pct * 0.5)
-            st.session_state.realized_pnl += tp2_gain_pct
-            
-            trade['tp2_hit'] = True
-            trade['sl'] = trade['entry']
-            save_data()
-        status_msg = "🚀 **Target 2 Hit (Won)** - Remaining 50% profit added to wallet!"
-        
-    elif tp1_reached and pnl_pct > 0:
+    # 1. الهدف الأول (TP1)
+    if tp1_reached and pnl_pct > 0 and not tp2_reached and not sl_hit and not trade.get('trade_closed', False):
         if not trade.get('tp1_hit', False):
             tp1_gain_pct = abs((trade['tp1'] - trade['entry']) / trade['entry']) * 100
             st.session_state.realized_pnl += (tp1_gain_pct * 0.5)
             trade['tp1_hit'] = True
-            trade['sl'] = trade['entry']  
+            trade['sl'] = trade['entry']
             save_data()
         status_msg = "🎯 **Target 1 Hit & Profit Secured** - First 50% profit taken and trade secured at entry."
-    else:
-        if not trade.get('tp1_hit', False) and not trade.get('tp2_hit', False):
-            trade['tp1_hit'] = False
-            trade['tp2_hit'] = False
-            trade['sl'] = trade['original_sl']
 
-    with st.expander(f"{sym} | {side_badge} | {trade['mode']} | PnL: {pnl_pct:.2f}%", expanded=True):
+    # 2. إغلاق الصفقة أوتوماتيك وتحويل حالتها إلى Close Trading وتفعيل Resting بدون حذفها من الشاشة
+    if (tp2_reached and pnl_pct > 0 or sl_hit) and not trade.get('trade_closed', False):
+        if tp2_reached:
+            if not trade.get('tp2_hit', False):
+                if not trade.get('tp1_hit', False):
+                    tp1_gain_pct = abs((trade['tp1'] - trade['entry']) / trade['entry']) * 100
+                    st.session_state.realized_pnl += (tp1_gain_pct * 0.5)
+                tp2_full_pct = abs((trade['tp2'] - trade['entry']) / trade['entry']) * 100
+                st.session_state.realized_pnl += (tp2_full_pct * 0.5)
+                trade['tp2_hit'] = True
+            trade['close_reason'] = "🚀 Target 2 Hit (Won)"
+        else:
+            effective_sl_pnl = 0.0 if trade.get('tp1_hit', False) else pnl_pct
+            if effective_sl_pnl < 0:
+                st.session_state.realized_pnl += effective_sl_pnl
+            trade['close_reason'] = "🛑 Stop Loss Hit"
+
+        # تسجيل الحالة كـ مغلقة وتفعيل فترة الراحة (Resting 1h)
+        trade['trade_closed'] = True
+        st.session_state.cooldowns[sym] = time.time() + (60 * 60)
+        save_data()
+
+    # تحديد شكل العنوان والعرض بناءً على حالة الصفقة (نشطة ولا مغلقة)
+    if trade.get('trade_closed', False):
+        header_title = f"🔴 CLOSE TRADING: {sym} | {side_badge} | {trade['close_reason']} | PnL: {pnl_pct:.2f}%"
+        status_msg = f"🔒 **Status: Close Trading ({trade['close_reason']})** - Trade entered 1h Resting mode. Click Remove whenever you like."
+    else:
+        header_title = f"{sym} | {side_badge} | {trade['mode']} | PnL: {pnl_pct:.2f}%"
+
+    with st.expander(header_title, expanded=True):
         if status_msg:
-            st.success(status_msg)
+            st.success(status_msg) if not trade.get('trade_closed', False) else st.warning(status_msg)
             
         st.markdown(f"""
         - **Type / Side:** {side_badge}
@@ -230,15 +241,16 @@ for sym, trade in list(st.session_state.active_trades.items()):
             close_time_str = close_dt.strftime('%Y-%m-%d %I:%M:%S %p (%A)')
             duration_sec = (time.time() - open_ts) if trade.get('open_timestamp') else 0
             
-            # حماية رصيد المحفظة: الصفقات القديمة بـ N/A لا تؤثر على الرصيد عند إزالتها
-            if trade.get('open_time', 'N/A') != 'N/A':
+            # لو الصفقة مكنتش اتقفلت أوتوماتيك قبل ما تتعملها Remove يدوي
+            if trade.get('open_time', 'N/A') != 'N/A' and not trade.get('trade_closed', False):
                 if not trade.get('tp1_hit', False) and not trade.get('tp2_hit', False):
                     st.session_state.realized_pnl += pnl_pct
             
+            reason_suffix = trade.get('close_reason', 'Manual Close')
             closed_trade_record = {
                 'symbol': sym,
                 'side': side,
-                'mode': trade['mode'],
+                'mode': trade['mode'] + f" ({reason_suffix})",
                 'entry': trade['entry'],
                 'close_price': live_price,
                 'final_pnl': pnl_pct,
@@ -248,6 +260,7 @@ for sym, trade in list(st.session_state.active_trades.items()):
             }
             st.session_state.closed_trades.append(closed_trade_record)
             
+            # التأكد من تفعيل الراحة لو لسه ممتفعلتش
             st.session_state.cooldowns[sym] = time.time() + (60 * 60)
             
             del st.session_state.active_trades[sym]
@@ -312,7 +325,15 @@ for symbol in SYMBOLS:
     atr_display = f"{atr_val:.4f}" if atr_val > 0 else f"{(current_price * 0.01):.4f}"
 
     if symbol in st.session_state.active_trades:
-        status = "🟢 Active Trade"
+        # لو الصفقة موجودة بس حالتها مغلقة تظهر في الرادار كأنها في Resting
+        if st.session_state.active_trades[symbol].get('trade_closed', False) or (symbol in st.session_state.cooldowns and current_time_epoch < st.session_state.cooldowns[symbol]):
+            if symbol in st.session_state.cooldowns and current_time_epoch < st.session_state.cooldowns[symbol]:
+                remaining_mins = int((st.session_state.cooldowns[symbol] - current_time_epoch) // 60)
+                status = f"🛌 Resting ({remaining_mins}m left)"
+            else:
+                status = "🔒 Closed / Resting"
+        else:
+            status = "🟢 Active Trade"
     elif symbol in st.session_state.cooldowns and current_time_epoch < st.session_state.cooldowns[symbol]:
         remaining_mins = int((st.session_state.cooldowns[symbol] - current_time_epoch) // 60)
         status = f"🛌 Resting ({remaining_mins}m left)"
@@ -362,7 +383,8 @@ for symbol in SYMBOLS:
                 'open_time': now_str,
                 'open_timestamp': time.time(),
                 'tp1_hit': False,
-                'tp2_hit': False
+                'tp2_hit': False,
+                'trade_closed': False
             }
             save_data()
             st.rerun()
@@ -395,7 +417,8 @@ for symbol in SYMBOLS:
                 'open_time': now_str,
                 'open_timestamp': time.time(),
                 'tp1_hit': False,
-                'tp2_hit': False
+                'tp2_hit': False,
+                'trade_closed': False
             }
             save_data()
             st.rerun()
