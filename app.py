@@ -12,7 +12,7 @@ from datetime import datetime
 # 1. إعدادات الشاشة الأساسية والتحديث التلقائي
 # ==========================================
 st.set_page_config(page_title="SMC Sniper Bot", layout="wide")
-st.title("🤖 SMC Sniper Bot - 1h Cooldown & Split Targets")
+st.title("🤖 SMC Sniper Bot - Safe Removal & Cooldown")
 
 st_autorefresh(interval=15000, limit=None, key="auto_refresh")
 
@@ -165,7 +165,7 @@ for sym, trade in list(st.session_state.active_trades.items()):
         trade['original_sl'] = trade['sl']
 
     open_ts = trade.get('open_timestamp', time.time())
-    current_duration = format_duration(time.time() - open_ts)
+    current_duration = format_duration(time.time() - open_ts) if trade.get('open_timestamp') else "N/A"
 
     side_badge = "🟢 BUY" if side == 'BUY' else "🔴 SELL"
     status_msg = ""
@@ -228,10 +228,12 @@ for sym, trade in list(st.session_state.active_trades.items()):
         if st.button(f"Remove {sym} (Manual)", key=f"remove_active_{sym}"):
             close_dt = datetime.now()
             close_time_str = close_dt.strftime('%Y-%m-%d %I:%M:%S %p (%A)')
-            duration_sec = time.time() - open_ts
+            duration_sec = (time.time() - open_ts) if trade.get('open_timestamp') else 0
             
-            if not trade.get('tp1_hit', False) and not trade.get('tp2_hit', False):
-                st.session_state.realized_pnl += pnl_pct
+            # حماية رصيد المحفظة: الصفقات القديمة بـ N/A لا تؤثر على الرصيد عند إزالتها
+            if trade.get('open_time', 'N/A') != 'N/A':
+                if not trade.get('tp1_hit', False) and not trade.get('tp2_hit', False):
+                    st.session_state.realized_pnl += pnl_pct
             
             closed_trade_record = {
                 'symbol': sym,
@@ -242,11 +244,10 @@ for sym, trade in list(st.session_state.active_trades.items()):
                 'final_pnl': pnl_pct,
                 'open_time': trade.get('open_time', 'N/A'),
                 'close_time': close_time_str,
-                'duration': format_duration(duration_sec)
+                'duration': format_duration(duration_sec) if duration_sec > 0 else 'N/A'
             }
             st.session_state.closed_trades.append(closed_trade_record)
             
-            # فترة راحة لمدة ساعة كاملة (60 دقيقة) بعد إغلاق الصفقة
             st.session_state.cooldowns[sym] = time.time() + (60 * 60)
             
             del st.session_state.active_trades[sym]
