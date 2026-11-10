@@ -12,7 +12,7 @@ from datetime import datetime
 # 1. إعدادات الشاشة الأساسية والتحديث التلقائي
 # ==========================================
 st.set_page_config(page_title="SMC Sniper Bot", layout="wide")
-st.title("🤖 SMC Sniper Bot - Clean Close & Resting")
+st.title("🤖 SMC Sniper Bot - Exact Close Price & Resting")
 
 st_autorefresh(interval=15000, limit=None, key="auto_refresh")
 
@@ -134,7 +134,7 @@ st.sidebar.markdown(f"### 💰 Realized PnL")
 st.sidebar.markdown(f"<h2 style='color:{pnl_color_sidebar}; margin-top:-15px;'>${st.session_state.realized_pnl:.2f}</h2>", unsafe_allow_html=True)
 
 # ==========================================
-# 5. صفقات التداول النشطة والمغلقة (بشكل مرتب ونظيف)
+# 5. صفقات التداول النشطة والمغلقة
 # ==========================================
 st.subheader("📊 Live Market Scanner & Active Portfolio")
 
@@ -187,8 +187,12 @@ for sym, trade in list(st.session_state.active_trades.items()):
             trade['sl'] = trade['entry']
             save_data()
 
-    # 2. إغلاق أوتوماتيك وتحويل للحالة المغلقة مع تفعيل الـ Resting
+    # 2. إغلاق أوتوماتيك + تثبيت سعر الإغلاق اللحظي (Close Price) وتفعيل الـ Resting
     if (tp2_reached and pnl_pct > 0 or sl_hit) and not trade.get('trade_closed', False):
+        close_dt = datetime.now()
+        trade['close_time_str'] = close_dt.strftime('%Y-%m-%d %I:%M:%S %p')
+        trade['fixed_close_price'] = live_price # تثبيت السعر لحظة الإغلاق بالضبط
+        
         if tp2_reached:
             if not trade.get('tp2_hit', False):
                 if not trade.get('tp1_hit', False):
@@ -205,38 +209,54 @@ for sym, trade in list(st.session_state.active_trades.items()):
             trade['close_reason'] = "🛑 Stop Loss Hit"
 
         trade['trade_closed'] = True
+        
+        # حساب نسبة الـ PnL النهائية الثابتة وقت الإغلاق
+        if side == 'BUY':
+            trade['fixed_pnl_pct'] = ((trade['fixed_close_price'] - trade['entry']) / trade['entry']) * 100
+        else:
+            trade['fixed_pnl_pct'] = ((trade['entry'] - trade['fixed_close_price']) / trade['entry']) * 100
+
         st.session_state.cooldowns[sym] = time.time() + (60 * 60)
         save_data()
 
-    # تصميم العنوان حسب حالة الصفقة
+    # استخدام السعر الثابت للإغلاق لو الصفقة قفلت، أو السعر الحي لو لسه شغالة
     if trade.get('trade_closed', False):
-        header_title = f"🔴 CLOSE TRADING: {sym} | {side_badge} | {trade['close_reason']} | PnL: {pnl_pct:.2f}%"
+        display_price = trade['fixed_close_price']
+        display_pnl = trade['fixed_pnl_pct']
+        pnl_color_box = "#00ff00" if display_pnl >= 0 else "#ff4b4b"
+        pnl_text_box = f"<span style='color:{pnl_color_box}'><b>{display_pnl:.2f}%</b></span>"
+        header_title = f"🔴 CLOSE TRADING: {sym} | {side_badge} | {trade['close_reason']} | PnL: {display_pnl:.2f}%"
     else:
-        header_title = f"{sym} | {side_badge} | {trade['mode']} | PnL: {pnl_pct:.2f}%"
+        display_price = live_price
+        display_pnl = pnl_pct
+        header_title = f"{sym} | {side_badge} | {trade['mode']} | PnL: {display_pnl:.2f}%"
 
     with st.expander(header_title, expanded=True):
-        st.markdown(f"""
+        close_info_markdown = f"""
         - **Type / Side:** {side_badge}
         - **Mode:** {trade['mode']}
         - **Entry Price:** ${trade['entry']:.4f}
-        - **Live Price:** ${live_price:.4f}
-        - **Total PnL:** {pnl_text}
+        - **{"Fixed Close Price" if trade.get('trade_closed', False) else "Live Price"}:** ${display_price:.4f}
+        - **Final PnL:** {pnl_text_box if trade.get('trade_closed', False) else pnl_text}
         - **🕒 Open Time:** {trade.get('open_time', 'N/A')}
+        - **📤 Close Time:** {trade.get('close_time_str', 'Still Active')}
         - **⏳ Running Duration:** {current_duration}
         - **🎯 Target 1 (50%):** ${trade['tp1']:.4f} {"(✅ Target 1 Hit & Secured)" if trade.get('tp1_hit') else ""}
         - **🚀 Target 2 (50%):** ${trade['tp2']:.4f} {"(🚀 Target 2 Hit / Won)" if trade.get('tp2_hit') else ""}
         - <span style='color:#ff4b4b'>**🛑 Stop Loss:** ${trade['sl']:.4f}</span>
-        """, unsafe_allow_html=True)
+        """
+        st.markdown(close_info_markdown, unsafe_allow_html=True)
         
         st.markdown("---")
         if st.button(f"Remove {sym} (Manual)", key=f"remove_active_{sym}"):
             close_dt = datetime.now()
-            close_time_str = close_dt.strftime('%Y-%m-%d %I:%M:%S %p (%A)')
+            close_time_str = trade.get('close_time_str', close_dt.strftime('%Y-%m-%d %I:%M:%S %p'))
             duration_sec = (time.time() - open_ts) if trade.get('open_timestamp') else 0
             
+            final_record_pnl = trade.get('fixed_pnl_pct', pnl_pct)
             if trade.get('open_time', 'N/A') != 'N/A' and not trade.get('trade_closed', False):
                 if not trade.get('tp1_hit', False) and not trade.get('tp2_hit', False):
-                    st.session_state.realized_pnl += pnl_pct
+                    st.session_state.realized_pnl += final_record_pnl
             
             reason_suffix = trade.get('close_reason', 'Manual Close')
             closed_trade_record = {
@@ -244,8 +264,8 @@ for sym, trade in list(st.session_state.active_trades.items()):
                 'side': side,
                 'mode': trade['mode'] + f" ({reason_suffix})",
                 'entry': trade['entry'],
-                'close_price': live_price,
-                'final_pnl': pnl_pct,
+                'close_price': display_price,
+                'final_pnl': final_record_pnl,
                 'open_time': trade.get('open_time', 'N/A'),
                 'close_time': close_time_str,
                 'duration': format_duration(duration_sec) if duration_sec > 0 else 'N/A'
@@ -415,3 +435,4 @@ for symbol in SYMBOLS:
             st.error(f"Error placing Action order: {e}")
 
 st.dataframe(market_radar_data, use_container_width=True)
+      
