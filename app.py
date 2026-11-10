@@ -12,7 +12,7 @@ from datetime import datetime
 # 1. إعدادات الشاشة الأساسية والتحديث التلقائي
 # ==========================================
 st.set_page_config(page_title="SMC Sniper Bot", layout="wide")
-st.title("🤖 SMC Sniper Bot - Optimized Pro & Action Strategy")
+st.title("🤖 SMC Sniper Bot - Clean Start & Portfolio Reset")
 
 st_autorefresh(interval=15000, limit=None, key="auto_refresh")
 
@@ -31,11 +31,11 @@ def load_data():
             with open(DATA_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 if 'realized_pnl' not in data:
-                    data['realized_pnl'] = 18.75
+                    data['realized_pnl'] = 20.0
                 return data
         except:
-            return {'active_trades': {}, 'closed_trades': [], 'cooldowns': {}, 'realized_pnl': 18.75}
-    return {'active_trades': {}, 'closed_trades': [], 'cooldowns': {}, 'realized_pnl': 18.75}
+            return {'active_trades': {}, 'closed_trades': [], 'cooldowns': {}, 'realized_pnl': 20.0}
+    return {'active_trades': {}, 'closed_trades': [], 'cooldowns': {}, 'realized_pnl': 20.0}
 
 def save_data():
     data = {
@@ -56,8 +56,8 @@ if 'data_loaded' not in st.session_state:
     st.session_state.closed_trades = saved_data.get('closed_trades', [])
     st.session_state.cooldowns = saved_data.get('cooldowns', {})
     
-    loaded_pnl = saved_data.get('realized_pnl', 18.75)
-    st.session_state.realized_pnl = loaded_pnl if loaded_pnl != 0.0 else 18.75
+    loaded_pnl = saved_data.get('realized_pnl', 20.0)
+    st.session_state.realized_pnl = loaded_pnl if loaded_pnl != 0.0 else 20.0
     
     st.session_state.data_loaded = True
 
@@ -127,11 +127,24 @@ def format_duration(seconds):
         return f"{mins} mins"
 
 # ==========================================
-# عرض إجمالي الأرباح والخسائر المحققة (Realized PnL)
+# الشريط الجانبي (عرض المحفظة وخيار التصفير والبداية الجديدة)
 # ==========================================
 pnl_color_sidebar = "#00ff00" if st.session_state.realized_pnl >= 0 else "#ff4b4b"
-st.sidebar.markdown(f"### 💰 Realized PnL")
+st.sidebar.markdown(f"### 💰 Portfolio Balance")
 st.sidebar.markdown(f"<h2 style='color:{pnl_color_sidebar}; margin-top:-15px;'>${st.session_state.realized_pnl:.2f}</h2>", unsafe_allow_html=True)
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("### ⚙️ Portfolio Reset Control")
+new_starting_balance = st.sidebar.number_input("Set Starting Capital ($):", min_value=1.0, value=20.0, step=1.0)
+
+if st.sidebar.button("🔄 Reset Portfolio & Clean All"):
+    st.session_state.realized_pnl = new_starting_balance
+    st.session_state.active_trades = {}
+    st.session_state.closed_trades = []
+    st.session_state.cooldowns = {}
+    save_data()
+    st.sidebar.success("Portfolio reset successfully!")
+    st.rerun()
 
 # ==========================================
 # 5. صفقات التداول النشطة والمغلقة
@@ -178,7 +191,7 @@ for sym, trade in list(st.session_state.active_trades.items()):
         tp1_reached = live_price <= trade['tp1']
         sl_hit = live_price >= trade['sl']
 
-    # 1. الهدف الأول (TP1)
+    # 1. الهدف الأول (TP1): تأمين 50% وإضافة الأرباح
     if tp1_reached and pnl_pct > 0 and not tp2_reached and not sl_hit and not trade.get('trade_closed', False):
         if not trade.get('tp1_hit', False):
             tp1_gain_pct = abs((trade['tp1'] - trade['entry']) / trade['entry']) * 100
@@ -187,7 +200,7 @@ for sym, trade in list(st.session_state.active_trades.items()):
             trade['sl'] = trade['entry']
             save_data()
 
-    # 2. إغلاق أوتوماتيك + تثبيت السعر لحظة ضرب الهدف الثاني أو الوقف
+    # 2. الإغلاق أوتوماتيك (TP2 أو Stop Loss) وتحديث المحفظة تلقائياً
     if (tp2_reached and pnl_pct > 0 or sl_hit) and not trade.get('trade_closed', False):
         close_dt = datetime.now()
         trade['close_time_str'] = close_dt.strftime('%Y-%m-%d %I:%M:%S %p')
@@ -202,20 +215,15 @@ for sym, trade in list(st.session_state.active_trades.items()):
                 st.session_state.realized_pnl += (tp2_full_pct * 0.5)
                 trade['tp2_hit'] = True
             trade['close_reason'] = "🚀 Target 2 Hit (Won)"
+            trade['fixed_pnl_pct'] = tp2_full_pct
         else:
+            # لو ضرب الاستوب لوس: تحسب الخسارة الحقيقية وتتخصم من المحفظة
             effective_sl_pnl = 0.0 if trade.get('tp1_hit', False) else pnl_pct
-            if effective_sl_pnl < 0:
-                st.session_state.realized_pnl += effective_sl_pnl
+            st.session_state.realized_pnl += effective_sl_pnl
             trade['close_reason'] = "🛑 Stop Loss Hit"
+            trade['fixed_pnl_pct'] = effective_sl_pnl
 
         trade['trade_closed'] = True
-        
-        if side == 'BUY':
-            trade['fixed_pnl_pct'] = ((trade['fixed_close_price'] - trade['entry']) / trade['entry']) * 100
-        else:
-            trade['fixed_pnl_pct'] = ((trade['entry'] - trade['fixed_close_price']) / trade['entry']) * 100
-
-        # تفعيل فترة الراحة فوراً لحظة الإغلاق الأوتوماتيكي
         st.session_state.cooldowns[sym] = time.time() + (60 * 60)
         save_data()
 
@@ -255,19 +263,13 @@ for sym, trade in list(st.session_state.active_trades.items()):
             close_time_str = trade.get('close_time_str', close_dt.strftime('%Y-%m-%d %I:%M:%S %p'))
             duration_sec = (time.time() - open_ts) if trade.get('open_timestamp') else 0
             
-            final_record_pnl = trade.get('fixed_pnl_pct', pnl_pct)
-            if trade.get('open_time', 'N/A') != 'N/A' and not is_closed:
-                if not trade.get('tp1_hit', False) and not trade.get('tp2_hit', False):
-                    st.session_state.realized_pnl += final_record_pnl
-            
-            reason_suffix = trade.get('close_reason', 'Manual Close')
             closed_trade_record = {
                 'symbol': sym,
                 'side': side,
-                'mode': trade['mode'] + f" ({reason_suffix})",
+                'mode': trade['mode'] + f" ({trade.get('close_reason', 'Manual Close')})",
                 'entry': trade['entry'],
                 'close_price': display_price,
-                'final_pnl': final_record_pnl,
+                'final_pnl': trade.get('fixed_pnl_pct', pnl_pct),
                 'open_time': trade.get('open_time', 'N/A'),
                 'close_time': close_time_str,
                 'duration': format_duration(duration_sec) if duration_sec > 0 else 'N/A'
@@ -278,7 +280,6 @@ for sym, trade in list(st.session_state.active_trades.items()):
             if not is_closed and not already_in_cooldown and trade.get('open_time', 'N/A') != 'N/A':
                 st.session_state.cooldowns[sym] = time.time() + (60 * 60)
             
-            # --- التعديل الصحيح للـ Remove بدلاً من الـ del الشرطي الخاطئ ---
             st.session_state.active_trades.pop(sym, None)
             save_data()
             st.rerun()
@@ -373,7 +374,7 @@ for symbol in SYMBOLS:
     effective_atr_15m = atr_val_15m if atr_val_15m > 0 else (current_price * 0.01)
     now_str = datetime.now().strftime('%Y-%m-%d %I:%M:%S %p')
 
-    # 1. صفقات Pro (الساعة): تم توسيع مسافة الوقف قليلاً (1.8 ATR) لمنع ضرب الوقف السريع مع حماية الأهداف
+    # 1. صفقات Pro (الساعة)
     if signal_1h in ['BUY', 'SELL']:
         try:
             min_target_pct = 0.02
@@ -409,7 +410,7 @@ for symbol in SYMBOLS:
         except Exception as e:
             st.error(f"Error placing Pro Instant order: {e}")
 
-    # 2. صفقات Action (15 دقيقة): بنفس إعداداتها الناجحة والدقيقة السابقة
+    # 2. صفقات Action (15 دقيقة)
     elif signal_15m in ['BUY', 'SELL']:
         try:
             min_target_pct = 0.015 
@@ -417,7 +418,7 @@ for symbol in SYMBOLS:
             
             if side == 'BUY':
                 tp1_price = current_price + max(effective_atr_15m * 1.5, current_price * min_target_pct)
-                tp2_price = current_price + max(effective_atr_15m * 3.0, current_price * (min_target_pct * 2))
+                tp2_price = current_price + max(effective_atr_15m * 3.0, current_price * (min_target_pct * (2)))
                 sl_price = current_price - (effective_atr_15m * 1.5)
             else: 
                 tp1_price = current_price - max(effective_atr_15m * 1.5, current_price * min_target_pct)
