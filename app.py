@@ -106,7 +106,6 @@ def analyze_smc(df):
     
     ema_val = df['EMA50'].iloc[-1] if 'EMA50' in df.columns else last_close
     
-    # تحسين دقة فلترة الاتجاه لمنع الإشارات الخاطئة
     if last_close > prev_high and last_close > ema_val:
         return 'BUY', atr_value
     elif last_close < prev_low and last_close < ema_val:
@@ -279,7 +278,8 @@ for sym, trade in list(st.session_state.active_trades.items()):
             if not is_closed and not already_in_cooldown and trade.get('open_time', 'N/A') != 'N/A':
                 st.session_state.cooldowns[sym] = time.time() + (60 * 60)
             
-            del st.session_state.active_trades[symbol] if symbol in st.session_state.active_trades else st.session_state.active_trades.pop(sym, None)
+            # --- التعديل الصحيح للـ Remove بدلاً من الـ del الشرطي الخاطئ ---
+            st.session_state.active_trades.pop(sym, None)
             save_data()
             st.rerun()
 
@@ -384,7 +384,7 @@ for symbol in SYMBOLS:
             if side == 'BUY':
                 tp1_price = current_price + max(effective_atr_1h * 1.8, current_price * min_target_pct)
                 tp2_price = current_price + max(effective_atr_1h * 3.5, current_price * (min_target_pct * 2))
-                sl_price = current_price - (effective_atr_1h * 1.8) # مسافة أمان أوسع للـ Pro لمنع ضرب الستوب المبكر
+                sl_price = current_price - (effective_atr_1h * 1.8)
             else: 
                 tp1_price = current_price - max(effective_atr_1h * 1.8, current_price * min_target_pct)
                 tp2_price = current_price - max(effective_atr_1h * 3.5, current_price * (min_target_pct * 2))
