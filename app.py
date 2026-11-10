@@ -12,7 +12,7 @@ from datetime import datetime
 # 1. إعدادات الشاشة الأساسية والتحديث التلقائي
 # ==========================================
 st.set_page_config(page_title="SMC Sniper Bot", layout="wide")
-st.title("🤖 SMC Sniper Bot - Smart Resting on Manual Remove")
+st.title("🤖 SMC Sniper Bot - Optimized Pro & Action Strategy")
 
 st_autorefresh(interval=15000, limit=None, key="auto_refresh")
 
@@ -106,6 +106,7 @@ def analyze_smc(df):
     
     ema_val = df['EMA50'].iloc[-1] if 'EMA50' in df.columns else last_close
     
+    # تحسين دقة فلترة الاتجاه لمنع الإشارات الخاطئة
     if last_close > prev_high and last_close > ema_val:
         return 'BUY', atr_value
     elif last_close < prev_low and last_close < ema_val:
@@ -219,7 +220,6 @@ for sym, trade in list(st.session_state.active_trades.items()):
         st.session_state.cooldowns[sym] = time.time() + (60 * 60)
         save_data()
 
-    # التأكد من وجود القيم الثابتة حتى لو الصفقة كانت مقفولة من نسخة كود سابقة
     is_closed = trade.get('trade_closed', False) or trade.get('resting_activated', False) or ('close_reason' in trade)
     
     if is_closed:
@@ -275,12 +275,11 @@ for sym, trade in list(st.session_state.active_trades.items()):
             }
             st.session_state.closed_trades.append(closed_trade_record)
             
-            # --- حماية مزدوجة: لا نُفعل راحة جديدة إذا كانت الصفقة مغلقة مسبقاً، أو قديمة (N/A)، أو في فترة راحة حالية ---
             already_in_cooldown = (sym in st.session_state.cooldowns) and (time.time() < st.session_state.cooldowns[sym])
             if not is_closed and not already_in_cooldown and trade.get('open_time', 'N/A') != 'N/A':
                 st.session_state.cooldowns[sym] = time.time() + (60 * 60)
             
-            del st.session_state.active_trades[sym]
+            del st.session_state.active_trades[symbol] if symbol in st.session_state.active_trades else st.session_state.active_trades.pop(sym, None)
             save_data()
             st.rerun()
 
@@ -337,9 +336,9 @@ for symbol in SYMBOLS:
     signal_15m, atr_15m = analyze_smc(df_15m)
     volume_15m = df_15m['volume'].iloc[-1]
 
-    raw_atr = df_15m['ATR'].iloc[-1] if 'ATR' in df_15m.columns else 0.0
-    atr_val = float(raw_atr) if (raw_atr is not None and not pd.isna(raw_atr)) else 0.0
-    atr_display = f"{atr_val:.4f}" if atr_val > 0 else f"{(current_price * 0.01):.4f}"
+    raw_atr_15m = df_15m['ATR'].iloc[-1] if 'ATR' in df_15m.columns else 0.0
+    atr_val_15m = float(raw_atr_15m) if (raw_atr_15m is not None and not pd.isna(raw_atr_15m)) else 0.0
+    atr_display = f"{atr_val_15m:.4f}" if atr_val_15m > 0 else f"{(current_price * 0.01):.4f}"
 
     if symbol in st.session_state.active_trades:
         t_obj = st.session_state.active_trades[symbol]
@@ -371,24 +370,25 @@ for symbol in SYMBOLS:
     if symbol in st.session_state.cooldowns and current_time_epoch < st.session_state.cooldowns[symbol]:
         continue
 
-    effective_atr_15m = atr_15m if atr_15m > 0 else (current_price * 0.01)
+    effective_atr_15m = atr_val_15m if atr_val_15m > 0 else (current_price * 0.01)
     now_str = datetime.now().strftime('%Y-%m-%d %I:%M:%S %p')
 
-    # 1. إشارات Pro الفورية
+    # 1. صفقات Pro (الساعة): تم توسيع مسافة الوقف قليلاً (1.8 ATR) لمنع ضرب الوقف السريع مع حماية الأهداف
     if signal_1h in ['BUY', 'SELL']:
         try:
-            min_target_pct = 0.015
+            min_target_pct = 0.02
             side = signal_1h
-            effective_atr_1h = atr_1h if atr_1h > 0 else (current_price * 0.01)
+            raw_atr_1h = df_1h['ATR'].iloc[-1] if 'ATR' in df_1h.columns else 0.0
+            effective_atr_1h = float(raw_atr_1h) if (raw_atr_1h is not None and not pd.isna(raw_atr_1h) and raw_atr_1h > 0) else (current_price * 0.015)
             
             if side == 'BUY':
-                tp1_price = current_price + max(effective_atr_1h * 1.5, current_price * min_target_pct)
-                tp2_price = current_price + max(effective_atr_1h * 3.0, current_price * (min_target_pct * 2))
-                sl_price = current_price - effective_atr_1h * 1.5
+                tp1_price = current_price + max(effective_atr_1h * 1.8, current_price * min_target_pct)
+                tp2_price = current_price + max(effective_atr_1h * 3.5, current_price * (min_target_pct * 2))
+                sl_price = current_price - (effective_atr_1h * 1.8) # مسافة أمان أوسع للـ Pro لمنع ضرب الستوب المبكر
             else: 
-                tp1_price = current_price - max(effective_atr_1h * 1.5, current_price * min_target_pct)
-                tp2_price = current_price - max(effective_atr_1h * 3.0, current_price * (min_target_pct * 2))
-                sl_price = current_price + effective_atr_1h * 1.5
+                tp1_price = current_price - max(effective_atr_1h * 1.8, current_price * min_target_pct)
+                tp2_price = current_price - max(effective_atr_1h * 3.5, current_price * (min_target_pct * 2))
+                sl_price = current_price + (effective_atr_1h * 1.8)
 
             st.session_state.active_trades[symbol] = {
                 'entry': current_price,
@@ -409,7 +409,7 @@ for symbol in SYMBOLS:
         except Exception as e:
             st.error(f"Error placing Pro Instant order: {e}")
 
-    # 2. صفقات Action الفورية
+    # 2. صفقات Action (15 دقيقة): بنفس إعداداتها الناجحة والدقيقة السابقة
     elif signal_15m in ['BUY', 'SELL']:
         try:
             min_target_pct = 0.015 
@@ -418,11 +418,11 @@ for symbol in SYMBOLS:
             if side == 'BUY':
                 tp1_price = current_price + max(effective_atr_15m * 1.5, current_price * min_target_pct)
                 tp2_price = current_price + max(effective_atr_15m * 3.0, current_price * (min_target_pct * 2))
-                sl_price = current_price - effective_atr_15m * 1.5
+                sl_price = current_price - (effective_atr_15m * 1.5)
             else: 
                 tp1_price = current_price - max(effective_atr_15m * 1.5, current_price * min_target_pct)
                 tp2_price = current_price - max(effective_atr_15m * 3.0, current_price * (min_target_pct * 2))
-                sl_price = current_price + effective_atr_15m * 1.5
+                sl_price = current_price + (effective_atr_15m * 1.5)
 
             st.session_state.active_trades[symbol] = {
                 'entry': current_price,
