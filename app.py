@@ -12,7 +12,7 @@ from datetime import datetime
 # 1. إعدادات الشاشة الأساسية والتحديث التلقائي
 # ==========================================
 st.set_page_config(page_title="SMC Sniper Bot", layout="wide")
-st.title("🤖 SMC Sniper Bot - Exact Close Price & Resting")
+st.title("🤖 SMC Sniper Bot - Smart Resting on Manual Remove")
 
 st_autorefresh(interval=15000, limit=None, key="auto_refresh")
 
@@ -187,11 +187,11 @@ for sym, trade in list(st.session_state.active_trades.items()):
             trade['sl'] = trade['entry']
             save_data()
 
-    # 2. إغلاق أوتوماتيك + تثبيت سعر الإغلاق اللحظي (Close Price) وتفعيل الـ Resting
+    # 2. إغلاق أوتوماتيك + تثبيت السعر لحظة ضرب الهدف الثاني أو الوقف
     if (tp2_reached and pnl_pct > 0 or sl_hit) and not trade.get('trade_closed', False):
         close_dt = datetime.now()
         trade['close_time_str'] = close_dt.strftime('%Y-%m-%d %I:%M:%S %p')
-        trade['fixed_close_price'] = live_price # تثبيت السعر لحظة الإغلاق بالضبط
+        trade['fixed_close_price'] = live_price
         
         if tp2_reached:
             if not trade.get('tp2_hit', False):
@@ -210,16 +210,15 @@ for sym, trade in list(st.session_state.active_trades.items()):
 
         trade['trade_closed'] = True
         
-        # حساب نسبة الـ PnL النهائية الثابتة وقت الإغلاق
         if side == 'BUY':
             trade['fixed_pnl_pct'] = ((trade['fixed_close_price'] - trade['entry']) / trade['entry']) * 100
         else:
             trade['fixed_pnl_pct'] = ((trade['entry'] - trade['fixed_close_price']) / trade['entry']) * 100
 
+        # تفعيل فترة الراحة فوراً لحظة الإغلاق الأوتوماتيكي
         st.session_state.cooldowns[sym] = time.time() + (60 * 60)
         save_data()
 
-    # استخدام السعر الثابت للإغلاق لو الصفقة قفلت، أو السعر الحي لو لسه شغالة
     if trade.get('trade_closed', False):
         display_price = trade['fixed_close_price']
         display_pnl = trade['fixed_pnl_pct']
@@ -271,7 +270,10 @@ for sym, trade in list(st.session_state.active_trades.items()):
                 'duration': format_duration(duration_sec) if duration_sec > 0 else 'N/A'
             }
             st.session_state.closed_trades.append(closed_trade_record)
-            st.session_state.cooldowns[sym] = time.time() + (60 * 60)
+            
+            # --- تعديل ذكي: لو الصفقة لم تكن قد أُغلقت أوتوماتيك (إغلاق يدوي), نفعل الراحة الآن. أما لو كانت مغلقة أصلاً فلا نجدد العداد ---
+            if not trade.get('trade_closed', False):
+                st.session_state.cooldowns[sym] = time.time() + (60 * 60)
             
             del st.session_state.active_trades[sym]
             save_data()
@@ -435,4 +437,3 @@ for symbol in SYMBOLS:
             st.error(f"Error placing Action order: {e}")
 
 st.dataframe(market_radar_data, use_container_width=True)
-      
