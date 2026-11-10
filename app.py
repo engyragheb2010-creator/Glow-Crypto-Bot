@@ -219,12 +219,16 @@ for sym, trade in list(st.session_state.active_trades.items()):
         st.session_state.cooldowns[sym] = time.time() + (60 * 60)
         save_data()
 
-    if trade.get('trade_closed', False):
-        display_price = trade['fixed_close_price']
-        display_pnl = trade['fixed_pnl_pct']
+    # التأكد من وجود القيم الثابتة حتى لو الصفقة كانت مقفولة من نسخة كود سابقة
+    is_closed = trade.get('trade_closed', False) or trade.get('resting_activated', False) or ('close_reason' in trade)
+    
+    if is_closed:
+        display_price = trade.get('fixed_close_price', live_price)
+        display_pnl = trade.get('fixed_pnl_pct', pnl_pct)
         pnl_color_box = "#00ff00" if display_pnl >= 0 else "#ff4b4b"
         pnl_text_box = f"<span style='color:{pnl_color_box}'><b>{display_pnl:.2f}%</b></span>"
-        header_title = f"🔴 CLOSE TRADING: {sym} | {side_badge} | {trade['close_reason']} | PnL: {display_pnl:.2f}%"
+        c_reason = trade.get('close_reason', 'Closed')
+        header_title = f"🔴 CLOSE TRADING: {sym} | {side_badge} | {c_reason} | PnL: {display_pnl:.2f}%"
     else:
         display_price = live_price
         display_pnl = pnl_pct
@@ -235,8 +239,8 @@ for sym, trade in list(st.session_state.active_trades.items()):
         - **Type / Side:** {side_badge}
         - **Mode:** {trade['mode']}
         - **Entry Price:** ${trade['entry']:.4f}
-        - **{"Fixed Close Price" if trade.get('trade_closed', False) else "Live Price"}:** ${display_price:.4f}
-        - **Final PnL:** {pnl_text_box if trade.get('trade_closed', False) else pnl_text}
+        - **{"Fixed Close Price" if is_closed else "Live Price"}:** ${display_price:.4f}
+        - **Final PnL:** {pnl_text_box if is_closed else pnl_text}
         - **🕒 Open Time:** {trade.get('open_time', 'N/A')}
         - **📤 Close Time:** {trade.get('close_time_str', 'Still Active')}
         - **⏳ Running Duration:** {current_duration}
@@ -253,7 +257,7 @@ for sym, trade in list(st.session_state.active_trades.items()):
             duration_sec = (time.time() - open_ts) if trade.get('open_timestamp') else 0
             
             final_record_pnl = trade.get('fixed_pnl_pct', pnl_pct)
-            if trade.get('open_time', 'N/A') != 'N/A' and not trade.get('trade_closed', False):
+            if trade.get('open_time', 'N/A') != 'N/A' and not is_closed:
                 if not trade.get('tp1_hit', False) and not trade.get('tp2_hit', False):
                     st.session_state.realized_pnl += final_record_pnl
             
@@ -271,8 +275,9 @@ for sym, trade in list(st.session_state.active_trades.items()):
             }
             st.session_state.closed_trades.append(closed_trade_record)
             
-            # --- تعديل ذكي: لو الصفقة لم تكن قد أُغلقت أوتوماتيك (إغلاق يدوي), نفعل الراحة الآن. أما لو كانت مغلقة أصلاً فلا نجدد العداد ---
-            if not trade.get('trade_closed', False):
+            # --- حماية مزدوجة: لا نُفعل راحة جديدة إذا كانت الصفقة مغلقة مسبقاً، أو قديمة (N/A)، أو في فترة راحة حالية ---
+            already_in_cooldown = (sym in st.session_state.cooldowns) and (time.time() < st.session_state.cooldowns[sym])
+            if not is_closed and not already_in_cooldown and trade.get('open_time', 'N/A') != 'N/A':
                 st.session_state.cooldowns[sym] = time.time() + (60 * 60)
             
             del st.session_state.active_trades[sym]
@@ -337,12 +342,14 @@ for symbol in SYMBOLS:
     atr_display = f"{atr_val:.4f}" if atr_val > 0 else f"{(current_price * 0.01):.4f}"
 
     if symbol in st.session_state.active_trades:
-        if st.session_state.active_trades[symbol].get('trade_closed', False) or (symbol in st.session_state.cooldowns and current_time_epoch < st.session_state.cooldowns[symbol]):
+        t_obj = st.session_state.active_trades[symbol]
+        t_closed = t_obj.get('trade_closed', False) or t_obj.get('resting_activated', False) or ('close_reason' in t_obj)
+        if t_closed or (symbol in st.session_state.cooldowns and current_time_epoch < st.session_state.cooldowns[symbol]):
             if symbol in st.session_state.cooldowns and current_time_epoch < st.session_state.cooldowns[symbol]:
                 remaining_mins = int((st.session_state.cooldowns[symbol] - current_time_epoch) // 60)
                 status = f"🛌 Resting ({remaining_mins}m left)"
             else:
-                status = "🔒 Closed / Resting"
+                status = "🔒 Closed (Ready to Remove)"
         else:
             status = "🟢 Active Trade"
     elif symbol in st.session_state.cooldowns and current_time_epoch < st.session_state.cooldowns[symbol]:
