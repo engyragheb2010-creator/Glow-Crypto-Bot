@@ -12,7 +12,7 @@ from datetime import datetime
 # 1. إعدادات الشاشة الأساسية والتحديث التلقائي
 # ==========================================
 st.set_page_config(page_title="SMC Sniper Bot", layout="wide")
-st.title("🤖 SMC Sniper Bot - Clean Start & Portfolio Reset")
+st.title("🤖 SMC Sniper Bot - Safe Trend & RSI Filters")
 
 st_autorefresh(interval=15000, limit=None, key="auto_refresh")
 
@@ -74,7 +74,8 @@ except Exception as e:
 # ==========================================
 # 4. دوال التحليل الفني وحساب المدة
 # ==========================================
-def fetch_data(symbol, timeframe, limit=100):
+# 🔴 تعديل: تم زيادة الـ limit لـ 250 عشان نقدر نحسب EMA 200 بدقة
+def fetch_data(symbol, timeframe, limit=250):
     try:
         bars = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
         df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -88,13 +89,21 @@ def fetch_data(symbol, timeframe, limit=100):
         
         ema_series = ta.ema(df['close'], length=50)
         df['EMA50'] = ema_series if ema_series is not None and not ema_series.empty else df['close']
+
+        # 🔴 جديد: إضافة EMA 200 لفلترة الاتجاه العام
+        ema200_series = ta.ema(df['close'], length=200)
+        df['EMA200'] = ema200_series if ema200_series is not None and not ema200_series.empty else df['close']
+
+        # 🔴 جديد: إضافة مؤشر RSI لمنع الشراء من القمة والبيع من القاع
+        rsi_series = ta.rsi(df['close'], length=14)
+        df['RSI'] = rsi_series if rsi_series is not None and not rsi_series.empty else 50.0
             
         return df
     except Exception as e:
         return None
 
 def analyze_smc(df):
-    if df is None or len(df) < 50:
+    if df is None or len(df) < 200: # 🔴 تعديل: التأكد من وجود بيانات تكفي لـ EMA200
         return 'NONE', 0.0
 
     last_close = df['close'].iloc[-1]
@@ -104,11 +113,16 @@ def analyze_smc(df):
     raw_atr = df['ATR'].iloc[-1] if 'ATR' in df.columns else 0.0
     atr_value = float(raw_atr) if (raw_atr is not None and not pd.isna(raw_atr)) else 0.0
     
-    ema_val = df['EMA50'].iloc[-1] if 'EMA50' in df.columns else last_close
+    ema_50 = df['EMA50'].iloc[-1] if 'EMA50' in df.columns else last_close
+    ema_200 = df['EMA200'].iloc[-1] if 'EMA200' in df.columns else last_close
+    rsi = df['RSI'].iloc[-1] if 'RSI' in df.columns else 50.0
     
-    if last_close > prev_high and last_close > ema_val:
+    # 🔴 استراتيجية الدخول الجديدة (محمية بفلتر الاتجاه والـ RSI):
+    # شراء: كسر قمة + فوق EMA 50 + فوق EMA 200 + مش متشبع شراء (RSI < 70)
+    if last_close > ema_200 and last_close > ema_50 and last_close > prev_high and rsi < 70:
         return 'BUY', atr_value
-    elif last_close < prev_low and last_close < ema_val:
+    # بيع: كسر قاع + تحت EMA 50 + تحت EMA 200 + مش متشبع بيع (RSI > 30)
+    elif last_close < ema_200 and last_close < ema_50 and last_close < prev_low and rsi > 30:
         return 'SELL', atr_value
         
     return 'NONE', 0.0
@@ -153,7 +167,7 @@ st.subheader("📊 Live Market Scanner & Active Portfolio")
 
 st.markdown("### 🟢 Active Trades (Persistent)")
 if not st.session_state.active_trades:
-    st.info("No active trades yet. Scanning for instant signals...")
+    st.info("No active trades yet. Scanning for filtered strong signals...")
     
 for sym, trade in list(st.session_state.active_trades.items()):
     try:
@@ -374,7 +388,7 @@ for symbol in SYMBOLS:
     effective_atr_15m = atr_val_15m if atr_val_15m > 0 else (current_price * 0.01)
     now_str = datetime.now().strftime('%Y-%m-%d %I:%M:%S %p')
 
-    # 1. صفقات Pro (الساعة)
+    # 🔴 تعديل: صفقات Pro (الساعة) مساحة ستوب 2.0 وأهداف 4.0 عشان نديها نفس للترند
     if signal_1h in ['BUY', 'SELL']:
         try:
             min_target_pct = 0.02
@@ -383,13 +397,13 @@ for symbol in SYMBOLS:
             effective_atr_1h = float(raw_atr_1h) if (raw_atr_1h is not None and not pd.isna(raw_atr_1h) and raw_atr_1h > 0) else (current_price * 0.015)
             
             if side == 'BUY':
-                tp1_price = current_price + max(effective_atr_1h * 1.8, current_price * min_target_pct)
-                tp2_price = current_price + max(effective_atr_1h * 3.5, current_price * (min_target_pct * 2))
-                sl_price = current_price - (effective_atr_1h * 1.8)
+                tp1_price = current_price + max(effective_atr_1h * 2.0, current_price * min_target_pct)
+                tp2_price = current_price + max(effective_atr_1h * 4.0, current_price * (min_target_pct * 2))
+                sl_price = current_price - (effective_atr_1h * 2.0)
             else: 
-                tp1_price = current_price - max(effective_atr_1h * 1.8, current_price * min_target_pct)
-                tp2_price = current_price - max(effective_atr_1h * 3.5, current_price * (min_target_pct * 2))
-                sl_price = current_price + (effective_atr_1h * 1.8)
+                tp1_price = current_price - max(effective_atr_1h * 2.0, current_price * min_target_pct)
+                tp2_price = current_price - max(effective_atr_1h * 4.0, current_price * (min_target_pct * 2))
+                sl_price = current_price + (effective_atr_1h * 2.0)
 
             st.session_state.active_trades[symbol] = {
                 'entry': current_price,
@@ -397,7 +411,7 @@ for symbol in SYMBOLS:
                 'tp2': tp2_price,
                 'sl': sl_price,
                 'original_sl': sl_price,
-                'mode': '🎯 Pro (Instant)',
+                'mode': '🎯 Pro (Filtered)',
                 'side': side,
                 'open_time': now_str,
                 'open_timestamp': time.time(),
@@ -410,20 +424,20 @@ for symbol in SYMBOLS:
         except Exception as e:
             st.error(f"Error placing Pro Instant order: {e}")
 
-    # 2. صفقات Action (15 دقيقة)
+    # 🔴 تعديل: صفقات Action (15 دقيقة) مساحة ستوب 1.8 وأهداف 3.5 لمنع الذيول
     elif signal_15m in ['BUY', 'SELL']:
         try:
             min_target_pct = 0.015 
             side = signal_15m
             
             if side == 'BUY':
-                tp1_price = current_price + max(effective_atr_15m * 1.5, current_price * min_target_pct)
-                tp2_price = current_price + max(effective_atr_15m * 3.0, current_price * (min_target_pct * (2)))
-                sl_price = current_price - (effective_atr_15m * 1.5)
+                tp1_price = current_price + max(effective_atr_15m * 1.8, current_price * min_target_pct)
+                tp2_price = current_price + max(effective_atr_15m * 3.5, current_price * (min_target_pct * (2)))
+                sl_price = current_price - (effective_atr_15m * 1.8)
             else: 
-                tp1_price = current_price - max(effective_atr_15m * 1.5, current_price * min_target_pct)
-                tp2_price = current_price - max(effective_atr_15m * 3.0, current_price * (min_target_pct * 2))
-                sl_price = current_price + (effective_atr_15m * 1.5)
+                tp1_price = current_price - max(effective_atr_15m * 1.8, current_price * min_target_pct)
+                tp2_price = current_price - max(effective_atr_15m * 3.5, current_price * (min_target_pct * 2))
+                sl_price = current_price + (effective_atr_15m * 1.8)
 
             st.session_state.active_trades[symbol] = {
                 'entry': current_price,
@@ -431,7 +445,7 @@ for symbol in SYMBOLS:
                 'tp2': tp2_price,
                 'sl': sl_price,
                 'original_sl': sl_price,
-                'mode': '🔥 Action',
+                'mode': '🔥 Action (Filtered)',
                 'side': side,
                 'open_time': now_str,
                 'open_timestamp': time.time(),
