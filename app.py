@@ -12,7 +12,7 @@ from datetime import datetime
 # 1. إعدادات الشاشة الأساسية والتحديث التلقائي
 # ==========================================
 st.set_page_config(page_title="SMC Sniper Bot", layout="wide")
-st.title("🤖 SMC Sniper Bot - Safe Trend & RSI Filters")
+st.title("🤖 SMC Sniper Bot - Safe Trend & Closed Candle Filters")
 
 st_autorefresh(interval=15000, limit=None, key="auto_refresh")
 
@@ -74,7 +74,6 @@ except Exception as e:
 # ==========================================
 # 4. دوال التحليل الفني وحساب المدة
 # ==========================================
-# 🔴 تعديل: تم زيادة الـ limit لـ 250 عشان نقدر نحسب EMA 200 بدقة
 def fetch_data(symbol, timeframe, limit=250):
     try:
         bars = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
@@ -90,11 +89,9 @@ def fetch_data(symbol, timeframe, limit=250):
         ema_series = ta.ema(df['close'], length=50)
         df['EMA50'] = ema_series if ema_series is not None and not ema_series.empty else df['close']
 
-        # 🔴 جديد: إضافة EMA 200 لفلترة الاتجاه العام
         ema200_series = ta.ema(df['close'], length=200)
         df['EMA200'] = ema200_series if ema200_series is not None and not ema200_series.empty else df['close']
 
-        # 🔴 جديد: إضافة مؤشر RSI لمنع الشراء من القمة والبيع من القاع
         rsi_series = ta.rsi(df['close'], length=14)
         df['RSI'] = rsi_series if rsi_series is not None and not rsi_series.empty else 50.0
             
@@ -103,26 +100,26 @@ def fetch_data(symbol, timeframe, limit=250):
         return None
 
 def analyze_smc(df):
-    if df is None or len(df) < 200: # 🔴 تعديل: التأكد من وجود بيانات تكفي لـ EMA200
+    if df is None or len(df) < 200:
         return 'NONE', 0.0
 
-    last_close = df['close'].iloc[-1]
-    prev_high = df['high'].iloc[-2]
-    prev_low = df['low'].iloc[-2]
+    # فحص آخر شمعة أغلقت فعلياً (-2) بدل الشمعة الحية (-1) لمنع الذيول الوهمية
+    closed_candle = df['close'].iloc[-2]
+    prev_high = df['high'].iloc[-3]
+    prev_low = df['low'].iloc[-3]
     
-    raw_atr = df['ATR'].iloc[-1] if 'ATR' in df.columns else 0.0
+    raw_atr = df['ATR'].iloc[-2] if 'ATR' in df.columns else 0.0
     atr_value = float(raw_atr) if (raw_atr is not None and not pd.isna(raw_atr)) else 0.0
     
-    ema_50 = df['EMA50'].iloc[-1] if 'EMA50' in df.columns else last_close
-    ema_200 = df['EMA200'].iloc[-1] if 'EMA200' in df.columns else last_close
-    rsi = df['RSI'].iloc[-1] if 'RSI' in df.columns else 50.0
+    ema_50 = df['EMA50'].iloc[-2] if 'EMA50' in df.columns else closed_candle
+    ema_200 = df['EMA200'].iloc[-2] if 'EMA200' in df.columns else closed_candle
+    rsi = df['RSI'].iloc[-2] if 'RSI' in df.columns else 50.0
     
-    # 🔴 استراتيجية الدخول الجديدة (محمية بفلتر الاتجاه والـ RSI):
-    # شراء: كسر قمة + فوق EMA 50 + فوق EMA 200 + مش متشبع شراء (RSI < 70)
-    if last_close > ema_200 and last_close > ema_50 and last_close > prev_high and rsi < 70:
+    # شراء: ترند صاعد حقيقي (EMA50 فوق EMA200) + إغلاق فوق القمة السابقة + RSI في منطقة آمنة (50 لـ 68)
+    if ema_50 > ema_200 and closed_candle > ema_50 and closed_candle > prev_high and 50 < rsi < 68:
         return 'BUY', atr_value
-    # بيع: كسر قاع + تحت EMA 50 + تحت EMA 200 + مش متشبع بيع (RSI > 30)
-    elif last_close < ema_200 and last_close < ema_50 and last_close < prev_low and rsi > 30:
+    # بيع: ترند هابط حقيقي (EMA50 تحت EMA200) + إغلاق تحت القاع السابق + RSI في منطقة آمنة (32 لـ 50)
+    elif ema_50 < ema_200 and closed_candle < ema_50 and closed_candle < prev_low and 32 < rsi < 50:
         return 'SELL', atr_value
         
     return 'NONE', 0.0
@@ -231,7 +228,6 @@ for sym, trade in list(st.session_state.active_trades.items()):
             trade['close_reason'] = "🚀 Target 2 Hit (Won)"
             trade['fixed_pnl_pct'] = tp2_full_pct
         else:
-            # لو ضرب الاستوب لوس: تحسب الخسارة الحقيقية وتتخصم من المحفظة
             effective_sl_pnl = 0.0 if trade.get('tp1_hit', False) else pnl_pct
             st.session_state.realized_pnl += effective_sl_pnl
             trade['close_reason'] = "🛑 Stop Loss Hit"
@@ -351,7 +347,7 @@ for symbol in SYMBOLS:
     signal_15m, atr_15m = analyze_smc(df_15m)
     volume_15m = df_15m['volume'].iloc[-1]
 
-    raw_atr_15m = df_15m['ATR'].iloc[-1] if 'ATR' in df_15m.columns else 0.0
+    raw_atr_15m = df_15m['ATR'].iloc[-2] if 'ATR' in df_15m.columns else 0.0
     atr_val_15m = float(raw_atr_15m) if (raw_atr_15m is not None and not pd.isna(raw_atr_15m)) else 0.0
     atr_display = f"{atr_val_15m:.4f}" if atr_val_15m > 0 else f"{(current_price * 0.01):.4f}"
 
@@ -388,12 +384,16 @@ for symbol in SYMBOLS:
     effective_atr_15m = atr_val_15m if atr_val_15m > 0 else (current_price * 0.01)
     now_str = datetime.now().strftime('%Y-%m-%d %I:%M:%S %p')
 
-    # 🔴 تعديل: صفقات Pro (الساعة) مساحة ستوب 2.0 وأهداف 4.0 عشان نديها نفس للترند
+    # التأكد من اتجاه فريم الساعة قبل دخول أي صفقة على فريم الـ 15 دقيقة
+    trend_1h_bullish = df_1h['close'].iloc[-2] > df_1h['EMA200'].iloc[-2]
+    trend_1h_bearish = df_1h['close'].iloc[-2] < df_1h['EMA200'].iloc[-2]
+
+    # 1. صفقات Pro (الساعة)
     if signal_1h in ['BUY', 'SELL']:
         try:
             min_target_pct = 0.02
             side = signal_1h
-            raw_atr_1h = df_1h['ATR'].iloc[-1] if 'ATR' in df_1h.columns else 0.0
+            raw_atr_1h = df_1h['ATR'].iloc[-2] if 'ATR' in df_1h.columns else 0.0
             effective_atr_1h = float(raw_atr_1h) if (raw_atr_1h is not None and not pd.isna(raw_atr_1h) and raw_atr_1h > 0) else (current_price * 0.015)
             
             if side == 'BUY':
@@ -424,15 +424,15 @@ for symbol in SYMBOLS:
         except Exception as e:
             st.error(f"Error placing Pro Instant order: {e}")
 
-    # 🔴 تعديل: صفقات Action (15 دقيقة) مساحة ستوب 1.8 وأهداف 3.5 لمنع الذيول
-    elif signal_15m in ['BUY', 'SELL']:
+    # 2. صفقات Action (15 دقيقة) متوافقة مع اتجاه فريم الساعة
+    elif (signal_15m == 'BUY' and trend_1h_bullish) or (signal_15m == 'SELL' and trend_1h_bearish):
         try:
             min_target_pct = 0.015 
             side = signal_15m
             
             if side == 'BUY':
                 tp1_price = current_price + max(effective_atr_15m * 1.8, current_price * min_target_pct)
-                tp2_price = current_price + max(effective_atr_15m * 3.5, current_price * (min_target_pct * (2)))
+                tp2_price = current_price + max(effective_atr_15m * 3.5, current_price * (min_target_pct * 2))
                 sl_price = current_price - (effective_atr_15m * 1.8)
             else: 
                 tp1_price = current_price - max(effective_atr_15m * 1.8, current_price * min_target_pct)
