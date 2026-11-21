@@ -24,7 +24,7 @@ if st.button("🔄 Force Update Price / Refresh Now"):
 # 2. إعدادات العملات والذاكرة الدائمة (JSON)
 # ==========================================
 SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'LINK/USDT', 'NEAR/USDT', 'SUI/USDT', 'AVAX/USDT', 'ADA/USDT', 'XRP/USDT']
-MAX_ACTIVE_TRADES = 10  # أقصى عدد صفقات مفتوحة في نفس الوقت لاختبار الفلتر بأمان
+MAX_ACTIVE_TRADES = 10  # مفتوح لاختبار الفلتر على كل العملات
 DATA_FILE = 'trades_data.json'
 
 def load_data():
@@ -377,6 +377,9 @@ for symbol in SYMBOLS:
     raw_adx_15m = df_15m['ADX'].iloc[-2] if 'ADX' in df_15m.columns else 0.0
     adx_val_15m = float(raw_adx_15m) if (raw_adx_15m is not None and not pd.isna(raw_adx_15m)) else 0.0
 
+    raw_rsi_15m = df_15m['RSI'].iloc[-2] if 'RSI' in df_15m.columns else 50.0
+    rsi_val_15m = float(raw_rsi_15m) if (raw_rsi_15m is not None and not pd.isna(raw_rsi_15m)) else 50.0
+
     # حساب عدد الصفقات المفتوحة فعلياً حالياً
     open_trades_count = sum(1 for t in st.session_state.active_trades.values() if not t.get('trade_closed', False))
 
@@ -405,6 +408,7 @@ for symbol in SYMBOLS:
         "🪙 Symbol": symbol,
         "💵 Price": f"${current_price:.4f}",
         "💪 15m ADX": f"{adx_val_15m:.1f}",
+        "📈 15m RSI": f"{rsi_val_15m:.1f}",
         "📏 15m ATR": atr_display,
         "📊 Volume": f"{volume_15m:.1f}",
         "Status": status
