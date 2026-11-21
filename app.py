@@ -380,6 +380,15 @@ for symbol in SYMBOLS:
     raw_rsi_15m = df_15m['RSI'].iloc[-2] if 'RSI' in df_15m.columns else 50.0
     rsi_val_15m = float(raw_rsi_15m) if (raw_rsi_15m is not None and not pd.isna(raw_rsi_15m)) else 50.0
 
+    # بيانات فحص سبب الانتظار
+    trend_1h_bullish = df_1h['close'].iloc[-2] > df_1h['EMA200'].iloc[-2]
+    trend_1h_bearish = df_1h['close'].iloc[-2] < df_1h['EMA200'].iloc[-2]
+    ema_50_15m = df_15m['EMA50'].iloc[-2]
+    ema_200_15m = df_15m['EMA200'].iloc[-2]
+    closed_15m = df_15m['close'].iloc[-2]
+    prev_high_15m = df_15m['high'].iloc[-3]
+    prev_low_15m = df_15m['low'].iloc[-3]
+
     # حساب عدد الصفقات المفتوحة فعلياً حالياً
     open_trades_count = sum(1 for t in st.session_state.active_trades.values() if not t.get('trade_closed', False))
 
@@ -402,7 +411,29 @@ for symbol in SYMBOLS:
     elif adx_val_15m <= 20:
         status = "😴 Sideways (ADX ≤ 20)"
     else:
-        status = "👀 Scanning..."
+        # توضيح الشرط الدقيق الذي ينتظره البوت
+        if trend_1h_bullish:
+            if ema_50_15m <= ema_200_15m:
+                status = "⏳ Wait 15m EMA50>200 (1h Up)"
+            elif not (50 < rsi_val_15m < 68):
+                status = "⏳ Wait RSI 50-68 (1h Up)"
+            elif closed_15m <= ema_50_15m:
+                status = "⏳ Wait Close>EMA50"
+            elif closed_15m <= prev_high_15m:
+                status = "⏳ Wait High Breakout"
+            else:
+                status = "👀 Ready (BUY)"
+        else:
+            if ema_50_15m >= ema_200_15m:
+                status = "⏳ Wait 15m EMA50<200 (1h Down)"
+            elif not (32 < rsi_val_15m < 50):
+                status = "⏳ Wait RSI 32-50 (1h Down)"
+            elif closed_15m >= ema_50_15m:
+                status = "⏳ Wait Close<EMA50"
+            elif closed_15m >= prev_low_15m:
+                status = "⏳ Wait Low Breakout"
+            else:
+                status = "👀 Ready (SELL)"
 
     market_radar_data.append({
         "🪙 Symbol": symbol,
@@ -423,9 +454,6 @@ for symbol in SYMBOLS:
 
     effective_atr_15m = atr_val_15m if atr_val_15m > 0 else (current_price * 0.01)
     now_str = datetime.now().strftime('%Y-%m-%d %I:%M:%S %p')
-
-    trend_1h_bullish = df_1h['close'].iloc[-2] > df_1h['EMA200'].iloc[-2]
-    trend_1h_bearish = df_1h['close'].iloc[-2] < df_1h['EMA200'].iloc[-2]
 
     # 1. صفقات Pro (الساعة)
     if signal_1h in ['BUY', 'SELL']:
