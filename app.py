@@ -12,17 +12,20 @@ from datetime import datetime
 # 1. إعدادات الشاشة الأساسية والتحديث التلقائي
 # ==========================================
 st.set_page_config(page_title="SMC Sniper Bot", layout="wide")
-st.title("🤖 SMC Sniper Bot - Safe Trend & Closed Candle Filters")
+st.title("🤖 SMC Sniper Bot - Lightweight & ADX Protected")
 
+# تحديث كل 15 ثانية لمتابعة السعر الحي والتارجت بسرعة (مع كاش للشموع كل 55 ثانية لتوفير الرامات)
 st_autorefresh(interval=15000, limit=None, key="auto_refresh")
 
 if st.button("🔄 Force Update Price / Refresh Now"):
     st.rerun()
 
 # ==========================================
-# 2. إعدادات الذاكرة الدائمة الآمنة (JSON)
+# 2. إعدادات العملات والذاكرة الدائمة (JSON)
 # ==========================================
-SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'LINK/USDT', 'NEAR/USDT', 'SUI/USDT', 'AVAX/USDT', 'ADA/USDT', 'XRP/USDT']
+# 3 عملات بسيولة عالية وحد أدنى مناسب للـ 20$ على OKX
+SYMBOLS = ['SOL/USDT', 'XRP/USDT', 'SUI/USDT']
+MAX_ACTIVE_TRADES = 1  # أقصى عدد صفقات مفتوحة في نفس الوقت للحماية من الارتباط
 DATA_FILE = 'trades_data.json'
 
 def load_data():
@@ -58,22 +61,24 @@ if 'data_loaded' not in st.session_state:
     
     loaded_pnl = saved_data.get('realized_pnl', 20.0)
     st.session_state.realized_pnl = loaded_pnl if loaded_pnl != 0.0 else 20.0
-    
     st.session_state.data_loaded = True
 
 # ==========================================
-# 3. الاتصال بمنصة OKX (للقراءة فقط)
+# 3. الاتصال بمنصة OKX (مع الكاش لتوفير الرامات)
 # ==========================================
+@st.cache_resource
+def get_exchange():
+    return ccxt.okx({'enableRateLimit': True})
+
 try:
-    exchange = ccxt.okx({
-        'enableRateLimit': True,
-    })
+    exchange = get_exchange()
 except Exception as e:
     st.error(f"Error connecting to OKX: {e}")
 
 # ==========================================
-# 4. دوال التحليل الفني وحساب المدة
+# 4. دوال التحليل الفني (مع الكاش وفلتر ADX)
 # ==========================================
+@st.cache_data(ttl=55)
 def fetch_data(symbol, timeframe, limit=250):
     try:
         bars = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
@@ -94,16 +99,23 @@ def fetch_data(symbol, timeframe, limit=250):
 
         rsi_series = ta.rsi(df['close'], length=14)
         df['RSI'] = rsi_series if rsi_series is not None and not rsi_series.empty else 50.0
+
+        # إضافة مؤشر ADX لفلترة السوق العرضي (الويك إند)
+        adx_df = ta.adx(df['high'], df['low'], df['close'], length=14)
+        if adx_df is not None and 'ADX_14' in adx_df.columns:
+            df['ADX'] = adx_df['ADX_14']
+        else:
+            df['ADX'] = 0.0
             
         return df
-    except Exception as e:
+    except Exception:
         return None
 
 def analyze_smc(df):
     if df is None or len(df) < 200:
         return 'NONE', 0.0
 
-    # فحص آخر شمعة أغلقت فعلياً (-2) بدل الشمعة الحية (-1) لمنع الذيول الوهمية
+    # فحص آخر شمعة أغلقت فعلياً (-2) لمنع الذيول الوهمية
     closed_candle = df['close'].iloc[-2]
     prev_high = df['high'].iloc[-3]
     prev_low = df['low'].iloc[-3]
@@ -115,10 +127,17 @@ def analyze_smc(df):
     ema_200 = df['EMA200'].iloc[-2] if 'EMA200' in df.columns else closed_candle
     rsi = df['RSI'].iloc[-2] if 'RSI' in df.columns else 50.0
     
-    # شراء: ترند صاعد حقيقي (EMA50 فوق EMA200) + إغلاق فوق القمة السابقة + RSI في منطقة آمنة (50 لـ 68)
+    raw_adx = df['ADX'].iloc[-2] if 'ADX' in df.columns else 0.0
+    adx = float(raw_adx) if (raw_adx is not None and not pd.isna(raw_adx)) else 0.0
+
+    # منع الدخول تماماً لو السوق عرضي أو ميت (ADX <= 20)
+    if adx <= 20:
+        return 'NONE', 0.0
+    
+    # شراء: ترند صاعد حقيقي + إغلاق فوق القمة السابقة + RSI آمن + زخم ADX > 20
     if ema_50 > ema_200 and closed_candle > ema_50 and closed_candle > prev_high and 50 < rsi < 68:
         return 'BUY', atr_value
-    # بيع: ترند هابط حقيقي (EMA50 تحت EMA200) + إغلاق تحت القاع السابق + RSI في منطقة آمنة (32 لـ 50)
+    # بيع: ترند هابط حقيقي + إغلاق تحت القاع السابق + RSI آمن + زخم ADX > 20
     elif ema_50 < ema_200 and closed_candle < ema_50 and closed_candle < prev_low and 32 < rsi < 50:
         return 'SELL', atr_value
         
@@ -138,10 +157,10 @@ def format_duration(seconds):
         return f"{mins} mins"
 
 # ==========================================
-# الشريط الجانبي (عرض المحفظة وخيار التصفير والبداية الجديدة)
+# الشريط الجانبي (المحفظة وإعدادات التصفير)
 # ==========================================
 pnl_color_sidebar = "#00ff00" if st.session_state.realized_pnl >= 0 else "#ff4b4b"
-st.sidebar.markdown(f"### 💰 Portfolio Balance")
+st.sidebar.markdown("### 💰 Portfolio Balance")
 st.sidebar.markdown(f"<h2 style='color:{pnl_color_sidebar}; margin-top:-15px;'>${st.session_state.realized_pnl:.2f}</h2>", unsafe_allow_html=True)
 
 st.sidebar.markdown("---")
@@ -158,13 +177,13 @@ if st.sidebar.button("🔄 Reset Portfolio & Clean All"):
     st.rerun()
 
 # ==========================================
-# 5. صفقات التداول النشطة والمغلقة
+# 5. صفقات التداول النشطة
 # ==========================================
 st.subheader("📊 Live Market Scanner & Active Portfolio")
 
-st.markdown("### 🟢 Active Trades (Persistent)")
+st.markdown(f"### 🟢 Active Trades (Max Open: {MAX_ACTIVE_TRADES})")
 if not st.session_state.active_trades:
-    st.info("No active trades yet. Scanning for filtered strong signals...")
+    st.info("No active trades yet. Scanning for strong trending signals (ADX > 20)...")
     
 for sym, trade in list(st.session_state.active_trades.items()):
     try:
@@ -190,7 +209,6 @@ for sym, trade in list(st.session_state.active_trades.items()):
 
     open_ts = trade.get('open_timestamp', time.time())
     current_duration = format_duration(time.time() - open_ts) if trade.get('open_timestamp') else "N/A"
-
     side_badge = "🟢 BUY" if side == 'BUY' else "🔴 SELL"
     
     if side == 'BUY':
@@ -202,7 +220,7 @@ for sym, trade in list(st.session_state.active_trades.items()):
         tp1_reached = live_price <= trade['tp1']
         sl_hit = live_price >= trade['sl']
 
-    # 1. الهدف الأول (TP1): تأمين 50% وإضافة الأرباح
+    # 1. الهدف الأول (TP1)
     if tp1_reached and pnl_pct > 0 and not tp2_reached and not sl_hit and not trade.get('trade_closed', False):
         if not trade.get('tp1_hit', False):
             tp1_gain_pct = abs((trade['tp1'] - trade['entry']) / trade['entry']) * 100
@@ -211,7 +229,7 @@ for sym, trade in list(st.session_state.active_trades.items()):
             trade['sl'] = trade['entry']
             save_data()
 
-    # 2. الإغلاق أوتوماتيك (TP2 أو Stop Loss) وتحديث المحفظة تلقائياً
+    # 2. الإغلاق الأوتوماتيك (TP2 أو Stop Loss)
     if (tp2_reached and pnl_pct > 0 or sl_hit) and not trade.get('trade_closed', False):
         close_dt = datetime.now()
         trade['close_time_str'] = close_dt.strftime('%Y-%m-%d %I:%M:%S %p')
@@ -297,7 +315,7 @@ for sym, trade in list(st.session_state.active_trades.items()):
 st.markdown("---")
 
 # ==========================================
-# 6. أرشيف الصفقات المغلقة (Closed Trades History)
+# 6. أرشيف الصفقات المغلقة
 # ==========================================
 st.subheader("📁 Closed Trades History & Timestamps Archive")
 if not st.session_state.closed_trades:
@@ -320,7 +338,7 @@ else:
             """, unsafe_allow_html=True)
             
             st.markdown("---")
-            if st.button(f"Remove from History", key=f"remove_closed_{original_index}"):
+            if st.button("Remove from History", key=f"remove_closed_{original_index}"):
                 st.session_state.closed_trades.pop(original_index)
                 save_data()
                 st.rerun()
@@ -332,8 +350,8 @@ st.markdown("---")
 # ==========================================
 st.markdown("### 📡 Market Radar (Live Scanner)")
 market_radar_data = []
-
 current_time_epoch = time.time()
+new_trade_opened = False
 
 for symbol in SYMBOLS:
     df_1h = fetch_data(symbol, '1h')
@@ -351,6 +369,12 @@ for symbol in SYMBOLS:
     atr_val_15m = float(raw_atr_15m) if (raw_atr_15m is not None and not pd.isna(raw_atr_15m)) else 0.0
     atr_display = f"{atr_val_15m:.4f}" if atr_val_15m > 0 else f"{(current_price * 0.01):.4f}"
 
+    raw_adx_15m = df_15m['ADX'].iloc[-2] if 'ADX' in df_15m.columns else 0.0
+    adx_val_15m = float(raw_adx_15m) if (raw_adx_15m is not None and not pd.isna(raw_adx_15m)) else 0.0
+
+    # حساب عدد الصفقات المفتوحة فعلياً حالياً
+    open_trades_count = sum(1 for t in st.session_state.active_trades.values() if not t.get('trade_closed', False))
+
     if symbol in st.session_state.active_trades:
         t_obj = st.session_state.active_trades[symbol]
         t_closed = t_obj.get('trade_closed', False) or t_obj.get('resting_activated', False) or ('close_reason' in t_obj)
@@ -365,12 +389,17 @@ for symbol in SYMBOLS:
     elif symbol in st.session_state.cooldowns and current_time_epoch < st.session_state.cooldowns[symbol]:
         remaining_mins = int((st.session_state.cooldowns[symbol] - current_time_epoch) // 60)
         status = f"🛌 Resting ({remaining_mins}m left)"
+    elif open_trades_count >= MAX_ACTIVE_TRADES:
+        status = "⏸️ Max Trades Reached"
+    elif adx_val_15m <= 20:
+        status = "😴 Sideways (ADX ≤ 20)"
     else:
         status = "👀 Scanning..."
 
     market_radar_data.append({
         "🪙 Symbol": symbol,
         "💵 Price": f"${current_price:.4f}",
+        "💪 15m ADX": f"{adx_val_15m:.1f}",
         "📏 15m ATR": atr_display,
         "📊 Volume": f"{volume_15m:.1f}",
         "Status": status
@@ -380,11 +409,12 @@ for symbol in SYMBOLS:
         continue
     if symbol in st.session_state.cooldowns and current_time_epoch < st.session_state.cooldowns[symbol]:
         continue
+    if open_trades_count >= MAX_ACTIVE_TRADES:
+        continue
 
     effective_atr_15m = atr_val_15m if atr_val_15m > 0 else (current_price * 0.01)
     now_str = datetime.now().strftime('%Y-%m-%d %I:%M:%S %p')
 
-    # التأكد من اتجاه فريم الساعة قبل دخول أي صفقة على فريم الـ 15 دقيقة
     trend_1h_bullish = df_1h['close'].iloc[-2] > df_1h['EMA200'].iloc[-2]
     trend_1h_bearish = df_1h['close'].iloc[-2] < df_1h['EMA200'].iloc[-2]
 
@@ -411,7 +441,7 @@ for symbol in SYMBOLS:
                 'tp2': tp2_price,
                 'sl': sl_price,
                 'original_sl': sl_price,
-                'mode': '🎯 Pro (Filtered)',
+                'mode': '🎯 Pro (ADX Filtered)',
                 'side': side,
                 'open_time': now_str,
                 'open_timestamp': time.time(),
@@ -420,11 +450,11 @@ for symbol in SYMBOLS:
                 'trade_closed': False
             }
             save_data()
-            st.rerun()
+            new_trade_opened = True
         except Exception as e:
-            st.error(f"Error placing Pro Instant order: {e}")
+            st.error(f"Error placing Pro order: {e}")
 
-    # 2. صفقات Action (15 دقيقة) متوافقة مع اتجاه فريم الساعة
+    # 2. صفقات Action (15 دقيقة) متوافقة مع اتجاه الساعة
     elif (signal_15m == 'BUY' and trend_1h_bullish) or (signal_15m == 'SELL' and trend_1h_bearish):
         try:
             min_target_pct = 0.015 
@@ -445,7 +475,7 @@ for symbol in SYMBOLS:
                 'tp2': tp2_price,
                 'sl': sl_price,
                 'original_sl': sl_price,
-                'mode': '🔥 Action (Filtered)',
+                'mode': '🔥 Action (ADX Filtered)',
                 'side': side,
                 'open_time': now_str,
                 'open_timestamp': time.time(),
@@ -454,8 +484,11 @@ for symbol in SYMBOLS:
                 'trade_closed': False
             }
             save_data()
-            st.rerun()
+            new_trade_opened = True
         except Exception as e:
             st.error(f"Error placing Action order: {e}")
 
 st.dataframe(market_radar_data, use_container_width=True)
+
+if new_trade_opened:
+    st.rerun()
