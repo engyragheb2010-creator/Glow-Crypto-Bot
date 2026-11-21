@@ -24,7 +24,7 @@ if st.button("🔄 Force Update Price / Refresh Now"):
 # 2. إعدادات العملات والذاكرة الدائمة (JSON)
 # ==========================================
 SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'LINK/USDT', 'NEAR/USDT', 'SUI/USDT', 'AVAX/USDT', 'ADA/USDT', 'XRP/USDT']
-MAX_ACTIVE_TRADES = 3  # أقصى عدد صفقات مفتوحة في نفس الوقت لاختبار الفلتر بأمان
+MAX_ACTIVE_TRADES = 10  # أقصى عدد صفقات مفتوحة في نفس الوقت لاختبار الفلتر بأمان
 DATA_FILE = 'trades_data.json'
 
 def load_data():
