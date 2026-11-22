@@ -2,25 +2,53 @@ import streamlit as st
 import ccxt
 import pandas as pd
 import pandas_ta as ta
+import requests
 import time
 import json
 import os
 from datetime import datetime
 
 # ==========================================
-# 1. إعدادات الشاشة الأساسية
+# 1. إعدادات الشاشة والربط السحابي (JSONBin)
 # ==========================================
 st.set_page_config(page_title="SMC Sniper Bot", layout="wide")
-st.title("🤖 SMC Sniper Bot - 10 Symbols & ADX Protected")
+st.title("🤖 SMC Sniper Bot - Cloud Memory & Live PnL")
+
+# حطي الكودين بتوعك من موقع jsonbin.io هنا بين علامات التنصيص:
+JSONBIN_BIN_ID = "6b02bc93ffd5d16053d55d5d"
+JSONBIN_API_KEY = "$2a$10$Y2gG93ZSPm0TetpeSZzUJOjJejPRL42P17olP0s3edOSXMlmWCkFi"
 
 # ==========================================
-# 2. إعدادات العملات والذاكرة الدائمة (JSON)
+# 2. إعدادات العملات والذاكرة السحابية الدائمة
 # ==========================================
 SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'LINK/USDT', 'NEAR/USDT', 'SUI/USDT', 'AVAX/USDT', 'ADA/USDT', 'XRP/USDT']
-MAX_ACTIVE_TRADES = 10  # مفتوح لاختبار الفلتر على كل العملات
+MAX_ACTIVE_TRADES = 10
 DATA_FILE = 'trades_data.json'
 
+def is_cloud_configured():
+    return (
+        JSONBIN_BIN_ID and "حطي" not in JSONBIN_BIN_ID
+        and JSONBIN_API_KEY and "حطي" not in JSONBIN_API_KEY
+    )
+
 def load_data():
+    default_data = {'active_trades': {}, 'closed_trades': [], 'cooldowns': {}, 'realized_pnl': 20.0}
+    
+    # 1. محاولة القراءة من السحابة (JSONBin) أولاً
+    if is_cloud_configured():
+        try:
+            url = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}/latest"
+            headers = {"X-Master-Key": JSONBIN_API_KEY}
+            res = requests.get(url, headers=headers, timeout=10)
+            if res.status_code == 200:
+                data = res.json().get("record", default_data)
+                if 'realized_pnl' not in data:
+                    data['realized_pnl'] = 20.0
+                return data
+        except Exception as e:
+            st.warning(f"Cloud load warning: {e}")
+
+    # 2. لو السحابة مش متظبطة، يقرأ من الملف المحلي كبديل
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, 'r', encoding='utf-8') as f:
@@ -29,8 +57,8 @@ def load_data():
                     data['realized_pnl'] = 20.0
                 return data
         except:
-            return {'active_trades': {}, 'closed_trades': [], 'cooldowns': {}, 'realized_pnl': 20.0}
-    return {'active_trades': {}, 'closed_trades': [], 'cooldowns': {}, 'realized_pnl': 20.0}
+            return default_data
+    return default_data
 
 def save_data():
     data = {
@@ -39,20 +67,31 @@ def save_data():
         'cooldowns': st.session_state.cooldowns,
         'realized_pnl': st.session_state.realized_pnl
     }
+    # حفظ محلي
     try:
         with open(DATA_FILE, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=4)
-    except Exception as e:
-        st.error(f"Save error: {e}")
+    except Exception:
+        pass
+
+    # حفظ سحابي دائم على JSONBin
+    if is_cloud_configured():
+        try:
+            url = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
+            headers = {
+                "Content-Type": "application/json",
+                "X-Master-Key": JSONBIN_API_KEY
+            }
+            requests.put(url, json=data, headers=headers, timeout=10)
+        except Exception as e:
+            st.warning(f"Cloud save warning: {e}")
 
 if 'data_loaded' not in st.session_state:
     saved_data = load_data()
     st.session_state.active_trades = saved_data.get('active_trades', {})
     st.session_state.closed_trades = saved_data.get('closed_trades', [])
     st.session_state.cooldowns = saved_data.get('cooldowns', {})
-    
-    loaded_pnl = saved_data.get('realized_pnl', 20.0)
-    st.session_state.realized_pnl = loaded_pnl if loaded_pnl != 0.0 else 20.0
+    st.session_state.realized_pnl = saved_data.get('realized_pnl', 20.0)
     st.session_state.data_loaded = True
 
 # ==========================================
@@ -92,7 +131,6 @@ def fetch_data(symbol, timeframe, limit=250):
         rsi_series = ta.rsi(df['close'], length=14)
         df['RSI'] = rsi_series if rsi_series is not None and not rsi_series.empty else 50.0
 
-        # إضافة مؤشر ADX لفلترة السوق العرضي (الويك إند)
         adx_df = ta.adx(df['high'], df['low'], df['close'], length=14)
         if adx_df is not None and 'ADX_14' in adx_df.columns:
             df['ADX'] = adx_df['ADX_14']
@@ -107,7 +145,6 @@ def analyze_smc(df):
     if df is None or len(df) < 200:
         return 'NONE', 0.0
 
-    # فحص آخر شمعة أغلقت فعلياً (-2) لمنع الذيول الوهمية
     closed_candle = df['close'].iloc[-2]
     prev_high = df['high'].iloc[-3]
     prev_low = df['low'].iloc[-3]
@@ -122,14 +159,11 @@ def analyze_smc(df):
     raw_adx = df['ADX'].iloc[-2] if 'ADX' in df.columns else 0.0
     adx = float(raw_adx) if (raw_adx is not None and not pd.isna(raw_adx)) else 0.0
 
-    # منع الدخول تماماً لو السوق عرضي أو ميت (ADX <= 20)
     if adx <= 20:
         return 'NONE', 0.0
     
-    # شراء: ترند صاعد حقيقي + إغلاق فوق القمة السابقة + RSI آمن + زخم ADX > 20
     if ema_50 > ema_200 and closed_candle > ema_50 and closed_candle > prev_high and 50 < rsi < 68:
         return 'BUY', atr_value
-    # بيع: ترند هابط حقيقي + إغلاق تحت القاع السابق + RSI آمن + زخم ADX > 20
     elif ema_50 < ema_200 and closed_candle < ema_50 and closed_candle < prev_low and 32 < rsi < 50:
         return 'SELL', atr_value
         
@@ -149,14 +183,14 @@ def format_duration(seconds):
         return f"{mins} mins"
 
 # ==========================================
-# الشريط الجانبي (المحفظة وإعدادات التصفير)
+# الشريط الجانبي (إعدادات التصفير فقط)
 # ==========================================
-pnl_color_sidebar = "#00ff00" if st.session_state.realized_pnl >= 0 else "#ff4b4b"
-st.sidebar.markdown("### 💰 Portfolio Balance")
-st.sidebar.markdown(f"<h2 style='color:{pnl_color_sidebar}; margin-top:-15px;'>${st.session_state.realized_pnl:.2f}</h2>", unsafe_allow_html=True)
-
-st.sidebar.markdown("---")
 st.sidebar.markdown("### ⚙️ Portfolio Reset Control")
+if is_cloud_configured():
+    st.sidebar.success("☁️ Cloud Memory: Connected")
+else:
+    st.sidebar.warning("⚠️ Cloud Memory: Not Connected")
+
 new_starting_balance = st.sidebar.number_input("Set Starting Capital ($):", min_value=1.0, value=20.0, step=1.0)
 
 if st.sidebar.button("🔄 Reset Portfolio & Clean All"):
@@ -173,6 +207,9 @@ if st.sidebar.button("🔄 Reset Portfolio & Clean All"):
 # ==========================================
 @st.fragment(run_every=15)
 def live_dashboard():
+    # عرض الرصيد الحي في مكان فاضي يتحدث فور إغلاق أي صفقة
+    balance_placeholder = st.empty()
+
     col1, col2 = st.columns([1, 2])
     with col1:
         if st.button("🔄 Force Update Price / Refresh Now"):
@@ -318,6 +355,16 @@ def live_dashboard():
                 st.session_state.active_trades.pop(sym, None)
                 save_data()
                 st.rerun()
+
+    # تحديث عرض الرصيد فوراً بعد فحص كل الصفقات وإغلاقها
+    bal_color = "#00ff00" if st.session_state.realized_pnl >= 20.0 else "#ff4b4b"
+    balance_placeholder.markdown(
+        f"<div style='padding:10px 15px; border-radius:8px; background-color:#1e2129; margin-bottom:15px;'>"
+        f"<span style='font-size:16px;'>💰 <b>Live Portfolio Balance:</b> </span>"
+        f"<span style='font-size:24px; color:{bal_color}; font-weight:bold;'>${st.session_state.realized_pnl:.2f}</span>"
+        f"</div>",
+        unsafe_allow_html=True
+    )
 
     st.markdown("---")
 
