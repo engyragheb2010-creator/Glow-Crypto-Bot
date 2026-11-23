@@ -352,12 +352,12 @@ def update_active_trades(state, live_prices, cooldown_mins, default_margin, defa
                 trade['sl'] = trade['entry']
                 changed = True
 
-        # TP2 أو SL
+        # TP2 أو SL (التنفيذ على السعر المحدد للأمر مثل OKX الحقيقي)
         if (tp2_reached and price_pnl_pct > 0 or sl_hit) and not trade.get('trade_closed', False):
             trade['close_time_str'] = datetime.now().strftime('%Y-%m-%d %I:%M:%S %p')
-            trade['fixed_close_price'] = live_price
 
-            if tp2_reached:
+            if tp2_reached and not sl_hit:
+                trade['fixed_close_price'] = trade['tp2']
                 tp1_usd = trade.get('tp1_realized_usd', 0.0)
                 if not trade.get('tp1_hit', False):
                     tp1_pct = abs((trade['tp1'] - trade['entry']) / trade['entry']) * 100
@@ -378,6 +378,7 @@ def update_active_trades(state, live_prices, cooldown_mins, default_margin, defa
                 trade['fixed_net_usd'] = total_net_usd
                 trade['fixed_roi_pct'] = (total_net_usd / margin) * 100.0
             else:
+                trade['fixed_close_price'] = trade['sl']
                 if trade.get('tp1_hit', False):
                     # النصف الأول كسب TP1، والنصف التاني قفل عند نقطة الدخول (خسارة عمولة النصف التاني بس)
                     half_fee = (pos_size * 0.5) * OKX_ROUND_TRIP_FEE
@@ -385,7 +386,11 @@ def update_active_trades(state, live_prices, cooldown_mins, default_margin, defa
                     total_net_usd = trade.get('tp1_realized_usd', 0.0) - half_fee
                     trade['close_reason'] = "🛡️ Breakeven SL (TP1 Secured)"
                 else:
-                    gross_usd = pos_size * (price_pnl_pct / 100.0)
+                    if side == 'BUY':
+                        sl_pnl_pct = ((trade['sl'] - trade['entry']) / trade['entry']) * 100.0
+                    else:
+                        sl_pnl_pct = ((trade['entry'] - trade['sl']) / trade['entry']) * 100.0
+                    gross_usd = pos_size * (sl_pnl_pct / 100.0)
                     fee_usd = pos_size * OKX_ROUND_TRIP_FEE
                     total_net_usd = gross_usd - fee_usd
                     state['realized_pnl'] += total_net_usd
