@@ -12,7 +12,7 @@ from datetime import datetime
 # 1. إعدادات الشاشة والربط السحابي (JSONBin)
 # ==========================================
 st.set_page_config(page_title="SMC Sniper Bot - Dual Mode", layout="wide")
-st.title("🤖 SMC Sniper Bot — 🐢 Swing vs ⚡ Scalping")
+st.title("🤖 SMC Sniper Bot — 🐢 Swing vs ⚡ Pro Scalping")
 
 # حطي الكودين بتوعك من موقع jsonbin.io هنا بين علامات التنصيص:
 JSONBIN_BIN_ID = "6b02bc93ffd5d16053d55d5d"
@@ -46,7 +46,6 @@ def is_cloud_configured():
     )
 
 def normalize_data(raw_data):
-    """تضمن إن البيانات متقسمة صح لـ swing و scalping حتى لو الملف قديم"""
     default = get_default_data()
     if not isinstance(raw_data, dict):
         return default
@@ -56,7 +55,6 @@ def normalize_data(raw_data):
                 if field not in raw_data[key]:
                     raw_data[key][field] = val
         return raw_data
-    # لو الملف القديم موجود، انقل بياناته لـ swing وابدأ scalping جديد
     if 'active_trades' in raw_data:
         default['swing'] = {
             'active_trades': raw_data.get('active_trades', {}),
@@ -121,18 +119,23 @@ except Exception as e:
     st.error(f"Error connecting to OKX: {e}")
 
 # ==========================================
-# 4. دوال جلب البيانات والتحليل الفني
+# 4. دوال جلب البيانات والمؤشرات
 # ==========================================
 def _build_df(symbol, timeframe, limit=250):
     try:
         bars = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
         df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        df['high'] = pd.to_numeric(df['high'], errors='coerce')
-        df['low'] = pd.to_numeric(df['low'], errors='coerce')
-        df['close'] = pd.to_numeric(df['close'], errors='coerce')
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
 
         atr_s = ta.atr(df['high'], df['low'], df['close'], length=14)
         df['ATR'] = atr_s if atr_s is not None and not atr_s.empty else 0.0
+
+        ema9_s = ta.ema(df['close'], length=9)
+        df['EMA9'] = ema9_s if ema9_s is not None and not ema9_s.empty else df['close']
+
+        ema21_s = ta.ema(df['close'], length=21)
+        df['EMA21'] = ema21_s if ema21_s is not None and not ema21_s.empty else df['close']
 
         ema50_s = ta.ema(df['close'], length=50)
         df['EMA50'] = ema50_s if ema50_s is not None and not ema50_s.empty else df['close']
@@ -145,6 +148,18 @@ def _build_df(symbol, timeframe, limit=250):
 
         adx_df = ta.adx(df['high'], df['low'], df['close'], length=14)
         df['ADX'] = adx_df['ADX_14'] if (adx_df is not None and 'ADX_14' in adx_df.columns) else 0.0
+
+        # متوسط الفوليوم لآخر 20 شمعة (للسكالبينج)
+        df['VOL_MA20'] = df['volume'].rolling(20).mean().fillna(df['volume'])
+
+        # حساب VWAP اليومي بدقة
+        dt_series = pd.to_datetime(df['timestamp'], unit='ms').dt.date
+        tp = (df['high'] + df['low'] + df['close']) / 3.0
+        pv = tp * df['volume']
+        cum_pv = pv.groupby(dt_series).cumsum()
+        cum_v = df['volume'].groupby(dt_series).cumsum().replace(0, pd.NA)
+        df['VWAP'] = (cum_pv / cum_v).fillna(df['close'])
+
         return df
     except Exception:
         return None
@@ -157,6 +172,7 @@ def fetch_data_slow(symbol, timeframe, limit=250):
 def fetch_data_fast(symbol, timeframe, limit=250):
     return _build_df(symbol, timeframe, limit)
 
+# --- تحليل الـ Swing (كما هو) ---
 def analyze_smc(df, adx_min=20, rsi_buy=(50, 68), rsi_sell=(32, 50)):
     if df is None or len(df) < 200:
         return 'NONE', 0.0
@@ -184,6 +200,57 @@ def analyze_smc(df, adx_min=20, rsi_buy=(50, 68), rsi_sell=(32, 50)):
         return 'SELL', atr_val
 
     return 'NONE', 0.0
+
+# --- تحليل الـ Scalping الجديد (VWAP + EMA9/21 Pullback + Volume) ---
+def analyze_scalping(df_5m, df_15m):
+    if df_5m is None or df_15m is None or len(df_5m) < 50 or len(df_15m) < 50:
+        return 'NONE', 0.0, "⏳ Loading Data"
+
+    trend_15m_up = df_15m['close'].iloc[-2] > df_15m['EMA50'].iloc[-2]
+    trend_15m_down = df_15m['close'].iloc[-2] < df_15m['EMA50'].iloc[-2]
+
+    o = df_5m['open'].iloc[-2]
+    h = df_5m['high'].iloc[-2]
+    l = df_5m['low'].iloc[-2]
+    c = df_5m['close'].iloc[-2]
+    v = df_5m['volume'].iloc[-2]
+    vol_ma = df_5m['VOL_MA20'].iloc[-2]
+
+    ema9 = df_5m['EMA9'].iloc[-2]
+    ema21 = df_5m['EMA21'].iloc[-2]
+    vwap = df_5m['VWAP'].iloc[-2]
+    rsi = df_5m['RSI'].iloc[-2]
+    raw_atr = df_5m['ATR'].iloc[-2]
+    atr_val = float(raw_atr) if (raw_atr is not None and not pd.isna(raw_atr)) else 0.0
+
+    vol_ok = v > (vol_ma * 1.3)
+
+    if trend_15m_up:
+        if c <= vwap:
+            return 'NONE', atr_val, "⏳ Wait Close > VWAP"
+        if ema9 <= ema21:
+            return 'NONE', atr_val, "⏳ Wait EMA9 > EMA21"
+        if not (l <= ema9 * 1.001 and c > ema9 and c > o):
+            return 'NONE', atr_val, "⏳ Wait Pullback to EMA9"
+        if not vol_ok:
+            return 'NONE', atr_val, "⏳ Wait Volume Spike"
+        if not (45 < rsi < 70):
+            return 'NONE', atr_val, "⏳ Wait RSI (45-70)"
+        return 'BUY', atr_val, "👀 Ready (BUY Pullback)"
+    elif trend_15m_down:
+        if c >= vwap:
+            return 'NONE', atr_val, "⏳ Wait Close < VWAP"
+        if ema9 >= ema21:
+            return 'NONE', atr_val, "⏳ Wait EMA9 < EMA21"
+        if not (h >= ema9 * 0.999 and c < ema9 and c < o):
+            return 'NONE', atr_val, "⏳ Wait Pullback to EMA9"
+        if not vol_ok:
+            return 'NONE', atr_val, "⏳ Wait Volume Spike"
+        if not (30 < rsi < 55):
+            return 'NONE', atr_val, "⏳ Wait RSI (30-55)"
+        return 'SELL', atr_val, "👀 Ready (SELL Pullback)"
+
+    return 'NONE', atr_val, "😴 Neutral 15m"
 
 def format_duration(seconds):
     mins = int(seconds // 60)
@@ -238,7 +305,7 @@ with col_r2:
         st.rerun()
 
 # ==========================================
-# 6. محرك التحديث والرادار لكل استراتيجية
+# 6. محرك التحديث والرادار
 # ==========================================
 def update_active_trades(state, live_prices, cooldown_mins):
     changed = False
@@ -257,7 +324,6 @@ def update_active_trades(state, live_prices, cooldown_mins):
             tp1_reached = live_price <= trade['tp1']
             sl_hit = live_price >= trade['sl']
 
-        # TP1
         if tp1_reached and pnl_pct > 0 and not tp2_reached and not sl_hit and not trade.get('trade_closed', False):
             if not trade.get('tp1_hit', False):
                 tp1_gain = abs((trade['tp1'] - trade['entry']) / trade['entry']) * 100
@@ -266,7 +332,6 @@ def update_active_trades(state, live_prices, cooldown_mins):
                 trade['sl'] = trade['entry']
                 changed = True
 
-        # TP2 أو SL
         if (tp2_reached and pnl_pct > 0 or sl_hit) and not trade.get('trade_closed', False):
             trade['close_time_str'] = datetime.now().strftime('%Y-%m-%d %I:%M:%S %p')
             trade['fixed_close_price'] = live_price
@@ -293,16 +358,14 @@ def update_active_trades(state, live_prices, cooldown_mins):
 
     return changed
 
-def scan_market_for_strategy(state, config, dfs_cache):
+def scan_swing(state, config, dfs_cache):
     radar_rows = []
     now_epoch = time.time()
     changed = False
 
-    htf = config['htf']
-    ltf = config['ltf']
+    htf, ltf = config['htf'], config['ltf']
     adx_min = config['adx_min']
-    rsi_buy = config['rsi_buy']
-    rsi_sell = config['rsi_sell']
+    rsi_buy, rsi_sell = config['rsi_buy'], config['rsi_sell']
 
     for sym in SYMBOLS:
         df_htf = dfs_cache.get((sym, htf))
@@ -317,11 +380,8 @@ def scan_market_for_strategy(state, config, dfs_cache):
 
         raw_atr = df_ltf['ATR'].iloc[-2]
         atr_val = float(raw_atr) if (raw_atr is not None and not pd.isna(raw_atr)) else 0.0
-        atr_disp = f"{atr_val:.4f}" if atr_val > 0 else f"{(current_price * 0.01):.4f}"
-
         raw_adx = df_ltf['ADX'].iloc[-2]
         adx_val = float(raw_adx) if (raw_adx is not None and not pd.isna(raw_adx)) else 0.0
-
         raw_rsi = df_ltf['RSI'].iloc[-2]
         rsi_val = float(raw_rsi) if (raw_rsi is not None and not pd.isna(raw_rsi)) else 50.0
 
@@ -338,11 +398,8 @@ def scan_market_for_strategy(state, config, dfs_cache):
         if sym in state['active_trades']:
             t_obj = state['active_trades'][sym]
             if t_obj.get('trade_closed', False):
-                if sym in state['cooldowns'] and now_epoch < state['cooldowns'][sym]:
-                    rem = int((state['cooldowns'][sym] - now_epoch) // 60)
-                    status = f"🛌 Resting ({rem}m left)"
-                else:
-                    status = "🔒 Closed (Ready to Remove)"
+                rem = int((state['cooldowns'].get(sym, 0) - now_epoch) // 60)
+                status = f"🛌 Resting ({rem}m left)" if rem > 0 else "🔒 Closed (Ready to Remove)"
             else:
                 status = "🟢 Active Trade"
         elif sym in state['cooldowns'] and now_epoch < state['cooldowns'][sym]:
@@ -354,39 +411,27 @@ def scan_market_for_strategy(state, config, dfs_cache):
             status = f"😴 Sideways (ADX ≤ {adx_min})"
         else:
             if trend_htf_up:
-                if ema50 <= ema200:
-                    status = f"⏳ Wait {ltf} EMA50>200 ({htf} Up)"
-                elif not (rsi_buy[0] < rsi_val < rsi_buy[1]):
-                    status = f"⏳ Wait RSI {rsi_buy[0]}-{rsi_buy[1]}"
-                elif closed_ltf <= ema50:
-                    status = "⏳ Wait Close>EMA50"
-                elif closed_ltf <= prev_high:
-                    status = "⏳ Wait High Breakout"
-                else:
-                    status = "👀 Ready (BUY)"
+                if ema50 <= ema200: status = "⏳ Wait 15m EMA50>200 (1h Up)"
+                elif not (rsi_buy[0] < rsi_val < rsi_buy[1]): status = f"⏳ Wait RSI {rsi_buy[0]}-{rsi_buy[1]}"
+                elif closed_ltf <= ema50: status = "⏳ Wait Close>EMA50"
+                elif closed_ltf <= prev_high: status = "⏳ Wait High Breakout"
+                else: status = "👀 Ready (BUY)"
             else:
-                if ema50 >= ema200:
-                    status = f"⏳ Wait {ltf} EMA50<200 ({htf} Down)"
-                elif not (rsi_sell[0] < rsi_val < rsi_sell[1]):
-                    status = f"⏳ Wait RSI {rsi_sell[0]}-{rsi_sell[1]}"
-                elif closed_ltf >= ema50:
-                    status = "⏳ Wait Close<EMA50"
-                elif closed_ltf >= prev_low:
-                    status = "⏳ Wait Low Breakout"
-                else:
-                    status = "👀 Ready (SELL)"
+                if ema50 >= ema200: status = "⏳ Wait 15m EMA50<200 (1h Down)"
+                elif not (rsi_sell[0] < rsi_val < rsi_sell[1]): status = f"⏳ Wait RSI {rsi_sell[0]}-{rsi_sell[1]}"
+                elif closed_ltf >= ema50: status = "⏳ Wait Close<EMA50"
+                elif closed_ltf >= prev_low: status = "⏳ Wait Low Breakout"
+                else: status = "👀 Ready (SELL)"
 
         radar_rows.append({
             "🪙 Symbol": sym,
             "💵 Price": f"${current_price:.4f}",
-            f"💪 {ltf} ADX": f"{adx_val:.1f}",
-            f"📈 {ltf} RSI": f"{rsi_val:.1f}",
-            f"📏 {ltf} ATR": atr_disp,
+            "💪 15m ADX": f"{adx_val:.1f}",
+            "📈 15m RSI": f"{rsi_val:.1f}",
             "📊 Volume": f"{vol_ltf:.1f}",
             "Status": status
         })
 
-        # فتح صفقة جديدة لو الشروط اتحققت
         if sym in state['active_trades'] or open_count >= MAX_ACTIVE_TRADES:
             continue
         if sym in state['cooldowns'] and now_epoch < state['cooldowns'][sym]:
@@ -395,19 +440,18 @@ def scan_market_for_strategy(state, config, dfs_cache):
         eff_atr = atr_val if atr_val > 0 else (current_price * 0.01)
         now_str = datetime.now().strftime('%Y-%m-%d %I:%M:%S %p')
 
-        entry_side = None
-        mode_label = None
+        entry_side, mode_label = None, None
         tp1_mult, tp2_mult, sl_mult, min_tp = config['tp1_mult'], config['tp2_mult'], config['sl_mult'], config['min_tp']
 
-        if config['allow_htf_pro'] and sig_htf in ['BUY', 'SELL']:
+        if sig_htf in ['BUY', 'SELL']:
             entry_side = sig_htf
-            mode_label = f"🎯 Pro ({htf})"
+            mode_label = "🎯 Pro (1h)"
             raw_htf_atr = df_htf['ATR'].iloc[-2]
             eff_atr = float(raw_htf_atr) if (raw_htf_atr is not None and not pd.isna(raw_htf_atr) and raw_htf_atr > 0) else (current_price * 0.015)
             tp1_mult, tp2_mult, sl_mult, min_tp = 2.0, 4.0, 2.0, 0.02
         elif (sig_ltf == 'BUY' and trend_htf_up) or (sig_ltf == 'SELL' and trend_htf_down):
             entry_side = sig_ltf
-            mode_label = config['action_label']
+            mode_label = "🐢 Swing (15m)"
 
         if entry_side:
             if entry_side == 'BUY':
@@ -420,18 +464,80 @@ def scan_market_for_strategy(state, config, dfs_cache):
                 sl = current_price + (eff_atr * sl_mult)
 
             state['active_trades'][sym] = {
-                'entry': current_price,
-                'tp1': tp1,
-                'tp2': tp2,
-                'sl': sl,
-                'original_sl': sl,
-                'mode': mode_label,
-                'side': entry_side,
-                'open_time': now_str,
-                'open_timestamp': time.time(),
-                'tp1_hit': False,
-                'tp2_hit': False,
-                'trade_closed': False
+                'entry': current_price, 'tp1': tp1, 'tp2': tp2, 'sl': sl, 'original_sl': sl,
+                'mode': mode_label, 'side': entry_side, 'open_time': now_str,
+                'open_timestamp': time.time(), 'tp1_hit': False, 'tp2_hit': False, 'trade_closed': False
+            }
+            changed = True
+
+    return radar_rows, changed
+
+def scan_scalping(state, config, dfs_cache):
+    radar_rows = []
+    now_epoch = time.time()
+    changed = False
+
+    for sym in SYMBOLS:
+        df_15m = dfs_cache.get((sym, '15m'))
+        df_5m = dfs_cache.get((sym, '5m'))
+        if df_15m is None or df_5m is None:
+            continue
+
+        current_price = df_5m['close'].iloc[-1]
+        sig, atr_val, diag_status = analyze_scalping(df_5m, df_15m)
+        rsi_val = float(df_5m['RSI'].iloc[-2]) if not pd.isna(df_5m['RSI'].iloc[-2]) else 50.0
+        vwap_val = float(df_5m['VWAP'].iloc[-2])
+        vol_ratio = df_5m['volume'].iloc[-2] / max(df_5m['VOL_MA20'].iloc[-2], 1e-9)
+
+        open_count = sum(1 for t in state['active_trades'].values() if not t.get('trade_closed', False))
+
+        if sym in state['active_trades']:
+            t_obj = state['active_trades'][sym]
+            if t_obj.get('trade_closed', False):
+                rem = int((state['cooldowns'].get(sym, 0) - now_epoch) // 60)
+                status = f"🛌 Resting ({rem}m left)" if rem > 0 else "🔒 Closed (Ready to Remove)"
+            else:
+                status = "🟢 Active Trade"
+        elif sym in state['cooldowns'] and now_epoch < state['cooldowns'][sym]:
+            rem = int((state['cooldowns'][sym] - now_epoch) // 60)
+            status = f"🛌 Resting ({rem}m left)"
+        elif open_count >= MAX_ACTIVE_TRADES:
+            status = "⏸️ Max Trades Reached"
+        else:
+            status = diag_status
+
+        radar_rows.append({
+            "🪙 Symbol": sym,
+            "💵 Price": f"${current_price:.4f}",
+            "📍 VWAP": f"${vwap_val:.4f}",
+            "📈 5m RSI": f"{rsi_val:.1f}",
+            "🔥 Vol Ratio": f"{vol_ratio:.2f}x",
+            "Status": status
+        })
+
+        if sym in state['active_trades'] or open_count >= MAX_ACTIVE_TRADES:
+            continue
+        if sym in state['cooldowns'] and now_epoch < state['cooldowns'][sym]:
+            continue
+
+        if sig in ['BUY', 'SELL']:
+            eff_atr = atr_val if atr_val > 0 else (current_price * 0.005)
+            now_str = datetime.now().strftime('%Y-%m-%d %I:%M:%S %p')
+            tp1_mult, tp2_mult, sl_mult, min_tp = config['tp1_mult'], config['tp2_mult'], config['sl_mult'], config['min_tp']
+
+            if sig == 'BUY':
+                tp1 = current_price + max(eff_atr * tp1_mult, current_price * min_tp)
+                tp2 = current_price + max(eff_atr * tp2_mult, current_price * (min_tp * 2))
+                sl = current_price - max(eff_atr * sl_mult, current_price * 0.004)
+            else:
+                tp1 = current_price - max(eff_atr * tp1_mult, current_price * min_tp)
+                tp2 = current_price - max(eff_atr * tp2_mult, current_price * (min_tp * 2))
+                sl = current_price + max(eff_atr * sl_mult, current_price * 0.004)
+
+            state['active_trades'][sym] = {
+                'entry': current_price, 'tp1': tp1, 'tp2': tp2, 'sl': sl, 'original_sl': sl,
+                'mode': "⚡ Pro Scalp (VWAP+EMA9)", 'side': sig, 'open_time': now_str,
+                'open_timestamp': time.time(), 'tp1_hit': False, 'tp2_hit': False, 'trade_closed': False
             }
             changed = True
 
@@ -476,15 +582,11 @@ def render_strategy_tab(strategy_key, state, live_prices, radar_rows, cooldown_m
             if st.button(f"Move {sym} to Archive", key=f"rem_act_{strategy_key}_{sym}"):
                 close_time_str = trade.get('close_time_str', datetime.now().strftime('%Y-%m-%d %I:%M:%S %p'))
                 state['closed_trades'].append({
-                    'symbol': sym,
-                    'side': side,
+                    'symbol': sym, 'side': side,
                     'mode': trade['mode'] + f" ({trade.get('close_reason', 'Manual')})",
-                    'entry': trade['entry'],
-                    'close_price': display_price,
-                    'final_pnl': display_pnl,
-                    'open_time': trade.get('open_time', 'N/A'),
-                    'close_time': close_time_str,
-                    'duration': duration_str
+                    'entry': trade['entry'], 'close_price': display_price,
+                    'final_pnl': display_pnl, 'open_time': trade.get('open_time', 'N/A'),
+                    'close_time': close_time_str, 'duration': duration_str
                 })
                 if not is_closed:
                     state['cooldowns'][sym] = time.time() + (cooldown_mins * 60)
@@ -523,14 +625,12 @@ SWING_CONFIG = {
     'htf': '1h', 'ltf': '15m', 'adx_min': 20,
     'rsi_buy': (50, 68), 'rsi_sell': (32, 50),
     'tp1_mult': 1.8, 'tp2_mult': 3.5, 'sl_mult': 1.8, 'min_tp': 0.015,
-    'allow_htf_pro': True, 'action_label': '🐢 Swing (15m)', 'cooldown_mins': 60
+    'cooldown_mins': 60
 }
 
 SCALP_CONFIG = {
-    'htf': '15m', 'ltf': '5m', 'adx_min': 18,
-    'rsi_buy': (48, 70), 'rsi_sell': (30, 52),
-    'tp1_mult': 1.0, 'tp2_mult': 2.0, 'sl_mult': 1.2, 'min_tp': 0.005,
-    'allow_htf_pro': False, 'action_label': '⚡ Scalping (5m)', 'cooldown_mins': 15
+    'tp1_mult': 1.2, 'tp2_mult': 2.2, 'sl_mult': 1.4, 'min_tp': 0.005,
+    'cooldown_mins': 15
 }
 
 @st.fragment(run_every=15)
@@ -542,7 +642,6 @@ def live_dashboard():
     with col2:
         st.caption(f"🕒 Last Auto-Update: {datetime.now().strftime('%I:%M:%S %p')} (Auto-refreshes every 15s)")
 
-    # 1. سحب الأسعار الحية والشموع مرة واحدة للنظامين معاً
     swing_state = st.session_state.bot_data['swing']
     scalp_state = st.session_state.bot_data['scalping']
 
@@ -560,20 +659,18 @@ def live_dashboard():
         dfs_cache[(sym, '15m')] = fetch_data_slow(sym, '15m')
         dfs_cache[(sym, '5m')] = fetch_data_fast(sym, '5m')
 
-    # 2. تحديث الصفقات وفحص السوق للنظامين في الخلفية
     c1 = update_active_trades(swing_state, live_prices, SWING_CONFIG['cooldown_mins'])
     c2 = update_active_trades(scalp_state, live_prices, SCALP_CONFIG['cooldown_mins'])
-    swing_radar, c3 = scan_market_for_strategy(swing_state, SWING_CONFIG, dfs_cache)
-    scalp_radar, c4 = scan_market_for_strategy(scalp_state, SCALP_CONFIG, dfs_cache)
+    swing_radar, c3 = scan_swing(swing_state, SWING_CONFIG, dfs_cache)
+    scalp_radar, c4 = scan_scalping(scalp_state, SCALP_CONFIG, dfs_cache)
 
     if c1 or c2 or c3 or c4:
         save_data()
 
-    # 3. لوحة المقارنة المباشرة (Swing vs Scalping)
     s_tot, s_win, s_wr, s_act = calc_stats(swing_state)
     sc_tot, sc_win, sc_wr, sc_act = calc_stats(scalp_state)
 
-    st.markdown("### 🏆 Live Comparison: Swing vs Scalping")
+    st.markdown("### 🏆 Live Comparison: Swing vs Pro Scalping")
     comp_col1, comp_col2 = st.columns(2)
 
     with comp_col1:
@@ -591,7 +688,7 @@ def live_dashboard():
         sc_color = "#00ff00" if scalp_state['realized_pnl'] >= 20.0 else "#ff4b4b"
         st.markdown(
             f"<div style='padding:12px; border-radius:10px; background-color:#1e2129; border-left: 5px solid #f39c12;'>"
-            f"<b>⚡ Scalping (15m / 5m)</b><br>"
+            f"<b>⚡ Pro Scalping (VWAP + EMA9/21)</b><br>"
             f"<span style='font-size:24px; color:{sc_color}; font-weight:bold;'>${scalp_state['realized_pnl']:.2f}</span><br>"
             f"<small>Active: {sc_act} | Closed: {sc_tot} | Win Rate: <b>{sc_wr:.1f}%</b></small>"
             f"</div>",
@@ -600,8 +697,7 @@ def live_dashboard():
 
     st.markdown("---")
 
-    # 4. التبويبين (Tabs)
-    tab_swing, tab_scalp = st.tabs([f"🐢 Swing ({s_act} Active)", f"⚡ Scalping ({sc_act} Active)"])
+    tab_swing, tab_scalp = st.tabs([f"🐢 Swing ({s_act} Active)", f"⚡ Pro Scalping ({sc_act} Active)"])
 
     with tab_swing:
         render_strategy_tab("swing", swing_state, live_prices, swing_radar, SWING_CONFIG['cooldown_mins'])
