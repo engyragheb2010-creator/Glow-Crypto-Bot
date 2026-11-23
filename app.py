@@ -11,19 +11,20 @@ from datetime import datetime
 # ==========================================
 # 1. إعدادات الشاشة والربط السحابي (JSONBin)
 # ==========================================
-st.set_page_config(page_title="SMC Sniper Bot - Dual Mode", layout="wide")
-st.title("🤖 SMC Sniper Bot — 🐢 Swing vs ⚡ Pro Scalping")
+st.set_page_config(page_title="SMC Sniper Bot - Futures Dual Mode", layout="wide")
+st.title("🤖 SMC Sniper Bot — 🐢 Swing vs ⚡ Pro Scalping (Futures)")
 
 # حطي الكودين بتوعك من موقع jsonbin.io هنا بين علامات التنصيص:
 JSONBIN_BIN_ID = "6b02bc93ffd5d16053d55d5d"
 JSONBIN_API_KEY = "$2a$10$Y2gG93ZSPm0TetpeSZzUJOjJejPRL42P17olP0s3edOSXMlmWCkFi"
 
 # ==========================================
-# 2. إعدادات العملات والذاكرة السحابية المزدوجة
+# 2. إعدادات العملات والعمولة والذاكرة السحابية
 # ==========================================
 SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'LINK/USDT', 'NEAR/USDT', 'SUI/USDT', 'AVAX/USDT', 'ADA/USDT', 'XRP/USDT']
 MAX_ACTIVE_TRADES = 10
 DATA_FILE = 'trades_data_dual.json'
+OKX_ROUND_TRIP_FEE = 0.001  # 0.05% دخول + 0.05% خروج (Taker Fee على OKX Futures)
 
 def get_default_strategy_state(start_balance=20.0):
     return {
@@ -149,10 +150,8 @@ def _build_df(symbol, timeframe, limit=250):
         adx_df = ta.adx(df['high'], df['low'], df['close'], length=14)
         df['ADX'] = adx_df['ADX_14'] if (adx_df is not None and 'ADX_14' in adx_df.columns) else 0.0
 
-        # متوسط الفوليوم لآخر 20 شمعة (للسكالبينج)
         df['VOL_MA20'] = df['volume'].rolling(20).mean().fillna(df['volume'])
 
-        # حساب VWAP اليومي بدقة
         dt_series = pd.to_datetime(df['timestamp'], unit='ms').dt.date
         tp = (df['high'] + df['low'] + df['close']) / 3.0
         pv = tp * df['volume']
@@ -172,7 +171,6 @@ def fetch_data_slow(symbol, timeframe, limit=250):
 def fetch_data_fast(symbol, timeframe, limit=250):
     return _build_df(symbol, timeframe, limit)
 
-# --- تحليل الـ Swing (كما هو) ---
 def analyze_smc(df, adx_min=20, rsi_buy=(50, 68), rsi_sell=(32, 50)):
     if df is None or len(df) < 200:
         return 'NONE', 0.0
@@ -201,7 +199,6 @@ def analyze_smc(df, adx_min=20, rsi_buy=(50, 68), rsi_sell=(32, 50)):
 
     return 'NONE', 0.0
 
-# --- تحليل الـ Scalping الجديد (VWAP + EMA9/21 Pullback + Volume) ---
 def analyze_scalping(df_5m, df_15m):
     if df_5m is None or df_15m is None or len(df_5m) < 50 or len(df_15m) < 50:
         return 'NONE', 0.0, "⏳ Loading Data"
@@ -267,20 +264,33 @@ def format_duration(seconds):
 def calc_stats(state):
     closed = state['closed_trades']
     total = len(closed)
-    wins = sum(1 for t in closed if t.get('final_pnl', 0) > 0)
+    wins = sum(1 for t in closed if t.get('net_pnl_usd', t.get('final_pnl', 0)) > 0)
     win_rate = (wins / total * 100) if total > 0 else 0.0
     active_count = sum(1 for t in state['active_trades'].values() if not t.get('trade_closed', False))
     return total, wins, win_rate, active_count
 
 # ==========================================
-# 5. الشريط الجانبي (إعدادات التصفير)
+# 5. الشريط الجانبي (إعدادات الفيوتشر والتصفير)
 # ==========================================
-st.sidebar.markdown("### ⚙️ Control Panel")
+st.sidebar.markdown("### ⚙️ Futures Settings")
 if is_cloud_configured():
     st.sidebar.success("☁️ Cloud Memory: Connected")
 else:
     st.sidebar.warning("⚠️ Cloud Memory: Not Connected")
 
+st.sidebar.caption("💸 OKX Futures Fee: 0.10% (0.05% In + 0.05% Out) auto-deducted")
+
+st.sidebar.markdown("#### 🐢 Swing Futures")
+swing_margin = st.sidebar.number_input("Swing Margin / Trade ($):", min_value=1.0, value=5.0, step=1.0)
+swing_leverage = st.sidebar.slider("Swing Leverage (x):", min_value=1, max_value=20, value=3)
+st.sidebar.caption(f"Position Size: **${swing_margin * swing_leverage:.0f}** | Est. Fee: **${swing_margin * swing_leverage * OKX_ROUND_TRIP_FEE:.3f}**")
+
+st.sidebar.markdown("#### ⚡ Scalping Futures")
+scalp_margin = st.sidebar.number_input("Scalping Margin / Trade ($):", min_value=1.0, value=5.0, step=1.0)
+scalp_leverage = st.sidebar.slider("Scalping Leverage (x):", min_value=1, max_value=20, value=5)
+st.sidebar.caption(f"Position Size: **${scalp_margin * scalp_leverage:.0f}** | Est. Fee: **${scalp_margin * scalp_leverage * OKX_ROUND_TRIP_FEE:.3f}**")
+
+st.sidebar.markdown("---")
 new_cap = st.sidebar.number_input("Starting Capital per Mode ($):", min_value=1.0, value=20.0, step=1.0)
 
 if st.sidebar.button("🔄 Reset BOTH (Swing + Scalping)"):
@@ -305,52 +315,84 @@ with col_r2:
         st.rerun()
 
 # ==========================================
-# 6. محرك التحديث والرادار
+# 6. محرك التحديث والرادار (مع حساب الفيوتشر والعمولة)
 # ==========================================
-def update_active_trades(state, live_prices, cooldown_mins):
+def update_active_trades(state, live_prices, cooldown_mins, default_margin, default_lev):
     changed = False
     for sym, trade in list(state['active_trades'].items()):
         live_price = live_prices.get(sym, trade['entry'])
         side = trade.get('side', 'BUY')
+        margin = trade.get('margin', default_margin)
+        lev = trade.get('leverage', default_lev)
+        pos_size = margin * lev
 
         if side == 'BUY':
-            pnl_pct = ((live_price - trade['entry']) / trade['entry']) * 100
+            price_pnl_pct = ((live_price - trade['entry']) / trade['entry']) * 100
             tp2_reached = live_price >= trade['tp2']
             tp1_reached = live_price >= trade['tp1']
             sl_hit = live_price <= trade['sl']
         else:
-            pnl_pct = ((trade['entry'] - live_price) / trade['entry']) * 100
+            price_pnl_pct = ((trade['entry'] - live_price) / trade['entry']) * 100
             tp2_reached = live_price <= trade['tp2']
             tp1_reached = live_price <= trade['tp1']
             sl_hit = live_price >= trade['sl']
 
-        if tp1_reached and pnl_pct > 0 and not tp2_reached and not sl_hit and not trade.get('trade_closed', False):
+        # TP1 (إغلاق 50% من الصفقة وخصم عمولة النصف ده)
+        if tp1_reached and price_pnl_pct > 0 and not tp2_reached and not sl_hit and not trade.get('trade_closed', False):
             if not trade.get('tp1_hit', False):
-                tp1_gain = abs((trade['tp1'] - trade['entry']) / trade['entry']) * 100
-                state['realized_pnl'] += (tp1_gain * 0.5)
+                tp1_pct = abs((trade['tp1'] - trade['entry']) / trade['entry']) * 100
+                half_size = pos_size * 0.5
+                gross_usd = half_size * (tp1_pct / 100.0)
+                fee_usd = half_size * OKX_ROUND_TRIP_FEE
+                net_tp1_usd = gross_usd - fee_usd
+
+                state['realized_pnl'] += net_tp1_usd
+                trade['tp1_realized_usd'] = net_tp1_usd
                 trade['tp1_hit'] = True
                 trade['sl'] = trade['entry']
                 changed = True
 
-        if (tp2_reached and pnl_pct > 0 or sl_hit) and not trade.get('trade_closed', False):
+        # TP2 أو SL
+        if (tp2_reached and price_pnl_pct > 0 or sl_hit) and not trade.get('trade_closed', False):
             trade['close_time_str'] = datetime.now().strftime('%Y-%m-%d %I:%M:%S %p')
             trade['fixed_close_price'] = live_price
 
             if tp2_reached:
-                if not trade.get('tp2_hit', False):
-                    if not trade.get('tp1_hit', False):
-                        tp1_gain = abs((trade['tp1'] - trade['entry']) / trade['entry']) * 100
-                        state['realized_pnl'] += (tp1_gain * 0.5)
-                    tp2_full = abs((trade['tp2'] - trade['entry']) / trade['entry']) * 100
-                    state['realized_pnl'] += (tp2_full * 0.5)
-                    trade['tp2_hit'] = True
+                tp1_usd = trade.get('tp1_realized_usd', 0.0)
+                if not trade.get('tp1_hit', False):
+                    tp1_pct = abs((trade['tp1'] - trade['entry']) / trade['entry']) * 100
+                    half_size = pos_size * 0.5
+                    tp1_usd = (half_size * (tp1_pct / 100.0)) - (half_size * OKX_ROUND_TRIP_FEE)
+                    state['realized_pnl'] += tp1_usd
+                    trade['tp1_realized_usd'] = tp1_usd
+                    trade['tp1_hit'] = True
+
+                tp2_pct = abs((trade['tp2'] - trade['entry']) / trade['entry']) * 100
+                half_size = pos_size * 0.5
+                tp2_usd = (half_size * (tp2_pct / 100.0)) - (half_size * OKX_ROUND_TRIP_FEE)
+                state['realized_pnl'] += tp2_usd
+                trade['tp2_hit'] = True
+
+                total_net_usd = tp1_usd + tp2_usd
                 trade['close_reason'] = "🚀 Target 2 Hit (Won)"
-                trade['fixed_pnl_pct'] = abs((trade['tp2'] - trade['entry']) / trade['entry']) * 100
+                trade['fixed_net_usd'] = total_net_usd
+                trade['fixed_roi_pct'] = (total_net_usd / margin) * 100.0
             else:
-                eff_sl = 0.0 if trade.get('tp1_hit', False) else pnl_pct
-                state['realized_pnl'] += eff_sl
-                trade['close_reason'] = "🛑 Stop Loss Hit"
-                trade['fixed_pnl_pct'] = eff_sl
+                if trade.get('tp1_hit', False):
+                    # النصف الأول كسب TP1، والنصف التاني قفل عند نقطة الدخول (خسارة عمولة النصف التاني بس)
+                    half_fee = (pos_size * 0.5) * OKX_ROUND_TRIP_FEE
+                    state['realized_pnl'] -= half_fee
+                    total_net_usd = trade.get('tp1_realized_usd', 0.0) - half_fee
+                    trade['close_reason'] = "🛡️ Breakeven SL (TP1 Secured)"
+                else:
+                    gross_usd = pos_size * (price_pnl_pct / 100.0)
+                    fee_usd = pos_size * OKX_ROUND_TRIP_FEE
+                    total_net_usd = gross_usd - fee_usd
+                    state['realized_pnl'] += total_net_usd
+                    trade['close_reason'] = "🛑 Stop Loss Hit"
+
+                trade['fixed_net_usd'] = total_net_usd
+                trade['fixed_roi_pct'] = (total_net_usd / margin) * 100.0
 
             trade['trade_closed'] = True
             state['cooldowns'][sym] = time.time() + (cooldown_mins * 60)
@@ -358,7 +400,7 @@ def update_active_trades(state, live_prices, cooldown_mins):
 
     return changed
 
-def scan_swing(state, config, dfs_cache):
+def scan_swing(state, config, dfs_cache, margin, leverage):
     radar_rows = []
     now_epoch = time.time()
     changed = False
@@ -466,13 +508,14 @@ def scan_swing(state, config, dfs_cache):
             state['active_trades'][sym] = {
                 'entry': current_price, 'tp1': tp1, 'tp2': tp2, 'sl': sl, 'original_sl': sl,
                 'mode': mode_label, 'side': entry_side, 'open_time': now_str,
-                'open_timestamp': time.time(), 'tp1_hit': False, 'tp2_hit': False, 'trade_closed': False
+                'open_timestamp': time.time(), 'tp1_hit': False, 'tp2_hit': False, 'trade_closed': False,
+                'margin': margin, 'leverage': leverage
             }
             changed = True
 
     return radar_rows, changed
 
-def scan_scalping(state, config, dfs_cache):
+def scan_scalping(state, config, dfs_cache, margin, leverage):
     radar_rows = []
     now_epoch = time.time()
     changed = False
@@ -537,13 +580,14 @@ def scan_scalping(state, config, dfs_cache):
             state['active_trades'][sym] = {
                 'entry': current_price, 'tp1': tp1, 'tp2': tp2, 'sl': sl, 'original_sl': sl,
                 'mode': "⚡ Pro Scalp (VWAP+EMA9)", 'side': sig, 'open_time': now_str,
-                'open_timestamp': time.time(), 'tp1_hit': False, 'tp2_hit': False, 'trade_closed': False
+                'open_timestamp': time.time(), 'tp1_hit': False, 'tp2_hit': False, 'trade_closed': False,
+                'margin': margin, 'leverage': leverage
             }
             changed = True
 
     return radar_rows, changed
 
-def render_strategy_tab(strategy_key, state, live_prices, radar_rows, cooldown_mins):
+def render_strategy_tab(strategy_key, state, live_prices, radar_rows, cooldown_mins, default_margin, default_lev):
     st.markdown(f"### 🟢 Active Trades (Max: {MAX_ACTIVE_TRADES})")
     if not state['active_trades']:
         st.info("No active trades right now. Scanning market...")
@@ -551,28 +595,36 @@ def render_strategy_tab(strategy_key, state, live_prices, radar_rows, cooldown_m
     for sym, trade in list(state['active_trades'].items()):
         live_price = live_prices.get(sym, trade['entry'])
         side = trade.get('side', 'BUY')
-        pnl_pct = ((live_price - trade['entry']) / trade['entry'] * 100) if side == 'BUY' else ((trade['entry'] - live_price) / trade['entry'] * 100)
-        is_closed = trade.get('trade_closed', False)
+        margin = trade.get('margin', default_margin)
+        lev = trade.get('leverage', default_lev)
+        pos_size = margin * lev
 
+        price_pnl_pct = ((live_price - trade['entry']) / trade['entry'] * 100) if side == 'BUY' else ((trade['entry'] - live_price) / trade['entry'] * 100)
+        est_net_usd = (pos_size * (price_pnl_pct / 100.0)) - (pos_size * OKX_ROUND_TRIP_FEE)
+        est_roi_pct = (est_net_usd / margin) * 100.0
+
+        is_closed = trade.get('trade_closed', False)
         display_price = trade.get('fixed_close_price', live_price) if is_closed else live_price
-        display_pnl = trade.get('fixed_pnl_pct', pnl_pct) if is_closed else pnl_pct
-        pnl_color = "#00ff00" if display_pnl >= 0 else "#ff4b4b"
-        side_badge = "🟢 BUY" if side == 'BUY' else "🔴 SELL"
+        display_usd = trade.get('fixed_net_usd', est_net_usd) if is_closed else est_net_usd
+        display_roi = trade.get('fixed_roi_pct', est_roi_pct) if is_closed else est_roi_pct
+
+        pnl_color = "#00ff00" if display_usd >= 0 else "#ff4b4b"
+        side_badge = "🟢 LONG" if side == 'BUY' else "🔴 SHORT"
         open_ts = trade.get('open_timestamp', time.time())
         duration_str = format_duration(time.time() - open_ts) if trade.get('open_timestamp') else "N/A"
 
         if is_closed:
-            header = f"🔴 CLOSED: {sym} | {side_badge} | {trade.get('close_reason', 'Closed')} | PnL: {display_pnl:.2f}%"
+            header = f"🔴 CLOSED: {sym} | {side_badge} ({lev}x) | {trade.get('close_reason', 'Closed')} | Net: ${display_usd:+.2f} ({display_roi:+.1f}%)"
         else:
-            header = f"{sym} | {side_badge} | {trade['mode']} | PnL: {display_pnl:.2f}%"
+            header = f"{sym} | {side_badge} ({lev}x) | Net: ${display_usd:+.2f} ({display_roi:+.1f}%)"
 
         with st.expander(header, expanded=True):
             tp1_tag = "(✅ TP1 Secured)" if trade.get('tp1_hit') else ""
             tp2_tag = "(🚀 TP2 Won)" if trade.get('tp2_hit') else ""
             st.markdown(f"""
-            - **Side:** {side_badge} | **Mode:** {trade['mode']}
+            - **Side:** {side_badge} | **Margin:** ${margin:.2f} × **{lev}x** = **${pos_size:.2f}**
             - **Entry:** ${trade['entry']:.4f} | **{'Close' if is_closed else 'Live'}:** ${display_price:.4f}
-            - **PnL:** <span style='color:{pnl_color}'><b>{display_pnl:.2f}%</b></span>
+            - **Net PnL (After Fees):** <span style='color:{pnl_color}'><b>${display_usd:+.2f} ({display_roi:+.1f}% ROI)</b></span>
             - **🕒 Opened:** {trade.get('open_time', 'N/A')} | **⏳ Duration:** {duration_str}
             - **🎯 TP1 (50%):** ${trade['tp1']:.4f} {tp1_tag}
             - **🚀 TP2 (50%):** ${trade['tp2']:.4f} {tp2_tag}
@@ -583,9 +635,10 @@ def render_strategy_tab(strategy_key, state, live_prices, radar_rows, cooldown_m
                 close_time_str = trade.get('close_time_str', datetime.now().strftime('%Y-%m-%d %I:%M:%S %p'))
                 state['closed_trades'].append({
                     'symbol': sym, 'side': side,
-                    'mode': trade['mode'] + f" ({trade.get('close_reason', 'Manual')})",
+                    'mode': f"{trade['mode']} ({lev}x) - {trade.get('close_reason', 'Manual')}",
                     'entry': trade['entry'], 'close_price': display_price,
-                    'final_pnl': display_pnl, 'open_time': trade.get('open_time', 'N/A'),
+                    'net_pnl_usd': display_usd, 'final_pnl': display_roi,
+                    'open_time': trade.get('open_time', 'N/A'),
                     'close_time': close_time_str, 'duration': duration_str
                 })
                 if not is_closed:
@@ -601,12 +654,13 @@ def render_strategy_tab(strategy_key, state, live_prices, radar_rows, cooldown_m
     else:
         for idx, ct in enumerate(reversed(list(state['closed_trades']))):
             orig_idx = len(state['closed_trades']) - 1 - idx
-            c_color = "#00ff00" if ct['final_pnl'] >= 0 else "#ff4b4b"
-            with st.expander(f"Closed: {ct['symbol']} | {ct['side']} | PnL: {ct['final_pnl']:.2f}%"):
+            net_usd = ct.get('net_pnl_usd', 0.0)
+            c_color = "#00ff00" if net_usd >= 0 else "#ff4b4b"
+            with st.expander(f"Closed: {ct['symbol']} | {ct['side']} | Net: ${net_usd:+.2f} ({ct['final_pnl']:+.1f}%)"):
                 st.markdown(f"""
                 - **Mode:** {ct['mode']}
                 - **Entry:** ${ct['entry']:.4f} → **Close:** ${ct['close_price']:.4f}
-                - **Final PnL:** <span style='color:{c_color}'><b>{ct['final_pnl']:.2f}%</b></span>
+                - **Net PnL:** <span style='color:{c_color}'><b>${net_usd:+.2f} ({ct['final_pnl']:+.1f}% ROI)</b></span>
                 - **📥 Opened:** {ct['open_time']} | **📤 Closed:** {ct['close_time']} ({ct['duration']})
                 """, unsafe_allow_html=True)
                 if st.button("Delete Record", key=f"rem_cls_{strategy_key}_{orig_idx}"):
@@ -659,10 +713,10 @@ def live_dashboard():
         dfs_cache[(sym, '15m')] = fetch_data_slow(sym, '15m')
         dfs_cache[(sym, '5m')] = fetch_data_fast(sym, '5m')
 
-    c1 = update_active_trades(swing_state, live_prices, SWING_CONFIG['cooldown_mins'])
-    c2 = update_active_trades(scalp_state, live_prices, SCALP_CONFIG['cooldown_mins'])
-    swing_radar, c3 = scan_swing(swing_state, SWING_CONFIG, dfs_cache)
-    scalp_radar, c4 = scan_scalping(scalp_state, SCALP_CONFIG, dfs_cache)
+    c1 = update_active_trades(swing_state, live_prices, SWING_CONFIG['cooldown_mins'], swing_margin, swing_leverage)
+    c2 = update_active_trades(scalp_state, live_prices, SCALP_CONFIG['cooldown_mins'], scalp_margin, scalp_leverage)
+    swing_radar, c3 = scan_swing(swing_state, SWING_CONFIG, dfs_cache, swing_margin, swing_leverage)
+    scalp_radar, c4 = scan_scalping(scalp_state, SCALP_CONFIG, dfs_cache, scalp_margin, scalp_leverage)
 
     if c1 or c2 or c3 or c4:
         save_data()
@@ -670,14 +724,14 @@ def live_dashboard():
     s_tot, s_win, s_wr, s_act = calc_stats(swing_state)
     sc_tot, sc_win, sc_wr, sc_act = calc_stats(scalp_state)
 
-    st.markdown("### 🏆 Live Comparison: Swing vs Pro Scalping")
+    st.markdown("### 🏆 Live Comparison: Swing vs Pro Scalping (After OKX Fees)")
     comp_col1, comp_col2 = st.columns(2)
 
     with comp_col1:
         s_color = "#00ff00" if swing_state['realized_pnl'] >= 20.0 else "#ff4b4b"
         st.markdown(
             f"<div style='padding:12px; border-radius:10px; background-color:#1e2129; border-left: 5px solid #3498db;'>"
-            f"<b>🐢 Swing (1h / 15m)</b><br>"
+            f"<b>🐢 Swing ({swing_leverage}x | ${swing_margin:.0f}/trade)</b><br>"
             f"<span style='font-size:24px; color:{s_color}; font-weight:bold;'>${swing_state['realized_pnl']:.2f}</span><br>"
             f"<small>Active: {s_act} | Closed: {s_tot} | Win Rate: <b>{s_wr:.1f}%</b></small>"
             f"</div>",
@@ -688,7 +742,7 @@ def live_dashboard():
         sc_color = "#00ff00" if scalp_state['realized_pnl'] >= 20.0 else "#ff4b4b"
         st.markdown(
             f"<div style='padding:12px; border-radius:10px; background-color:#1e2129; border-left: 5px solid #f39c12;'>"
-            f"<b>⚡ Pro Scalping (VWAP + EMA9/21)</b><br>"
+            f"<b>⚡ Pro Scalping ({scalp_leverage}x | ${scalp_margin:.0f}/trade)</b><br>"
             f"<span style='font-size:24px; color:{sc_color}; font-weight:bold;'>${scalp_state['realized_pnl']:.2f}</span><br>"
             f"<small>Active: {sc_act} | Closed: {sc_tot} | Win Rate: <b>{sc_wr:.1f}%</b></small>"
             f"</div>",
@@ -700,9 +754,9 @@ def live_dashboard():
     tab_swing, tab_scalp = st.tabs([f"🐢 Swing ({s_act} Active)", f"⚡ Pro Scalping ({sc_act} Active)"])
 
     with tab_swing:
-        render_strategy_tab("swing", swing_state, live_prices, swing_radar, SWING_CONFIG['cooldown_mins'])
+        render_strategy_tab("swing", swing_state, live_prices, swing_radar, SWING_CONFIG['cooldown_mins'], swing_margin, swing_leverage)
 
     with tab_scalp:
-        render_strategy_tab("scalping", scalp_state, live_prices, scalp_radar, SCALP_CONFIG['cooldown_mins'])
+        render_strategy_tab("scalping", scalp_state, live_prices, scalp_radar, SCALP_CONFIG['cooldown_mins'], scalp_margin, scalp_leverage)
 
 live_dashboard()
