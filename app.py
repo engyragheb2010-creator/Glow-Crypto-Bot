@@ -89,7 +89,7 @@ def load_data():
         try:
             with open(DATA_FILE, 'r', encoding='utf-8') as f:
                 return normalize_data(json.load(f))
-        except:
+        except Exception:
             return get_default_data()
     return get_default_data()
 
@@ -129,7 +129,7 @@ except Exception as e:
     st.error(f"Error connecting to OKX: {e}")
 
 # ==========================================
-# 4. دوال جلب البيانات والمؤشرات (Auto-ADX)
+# 4. دوال جلب البيانات والمؤشرات والإحصائيات
 # ==========================================
 def _build_df(symbol, timeframe, limit=250):
     try:
@@ -166,7 +166,6 @@ def fetch_data_fast(symbol, timeframe, limit=250):
     return _build_df(symbol, timeframe, limit)
 
 def check_auto_adx(adx_curr, adx_prev, adx_strong=18.0, adx_rising_min=14.0):
-    # يقبل الدخول لو الترند قوي (>18) أو في بداية صعود الزخم (>14 وبيزيد عن الشمعة السابقة)
     return (adx_curr > adx_strong) or (adx_curr > adx_rising_min and adx_curr > adx_prev)
 
 def analyze_smc(df, adx_strong=18.0, adx_rising_min=14.0, rsi_buy=(50, 68), rsi_sell=(32, 50)):
@@ -218,6 +217,58 @@ def calc_stats(state):
     win_rate = (wins / total * 100) if total > 0 else 0.0
     active_count = sum(1 for t in state['active_trades'].values() if not t.get('trade_closed', False))
     return total, wins, win_rate, active_count
+
+def build_coin_stats(classic_state, fast_state):
+    stats = {}
+    for state in [classic_state, fast_state]:
+        for ct in state.get('closed_trades', []):
+            sym = ct.get('symbol')
+            pnl = float(ct.get('net_pnl_usd', 0.0))
+            if not sym:
+                continue
+            if sym not in stats:
+                stats[sym] = {'trades': 0, 'wins': 0, 'losses': 0, 'net_usd': 0.0}
+            stats[sym]['trades'] += 1
+            stats[sym]['net_usd'] += pnl
+            if pnl > 0:
+                stats[sym]['wins'] += 1
+            else:
+                stats[sym]['losses'] += 1
+
+        for sym, tr in state.get('active_trades', {}).items():
+            if tr.get('trade_closed', False):
+                pnl = float(tr.get('fixed_net_usd', 0.0))
+                if sym not in stats:
+                    stats[sym] = {'trades': 0, 'wins': 0, 'losses': 0, 'net_usd': 0.0}
+                stats[sym]['trades'] += 1
+                stats[sym]['net_usd'] += pnl
+                if pnl > 0:
+                    stats[sym]['wins'] += 1
+                else:
+                    stats[sym]['losses'] += 1
+
+    rows = []
+    sorted_coins = sorted(stats.items(), key=lambda x: (x[1]['net_usd'], x[1]['wins']), reverse=True)
+    for idx, (sym, d) in enumerate(sorted_coins):
+        wr = (d['wins'] / d['trades'] * 100) if d['trades'] > 0 else 0.0
+        if d['net_usd'] > 0 and idx < 4:
+            badge = "🏆 Top Pick"
+        elif d['net_usd'] > 0:
+            badge = "✅ Profitable"
+        elif d['net_usd'] == 0:
+            badge = "➖ Breakeven"
+        else:
+            badge = "⚠️ Losing"
+
+        rows.append({
+            "🪙 Coin": sym,
+            "📊 Trades": d['trades'],
+            "✅ Win / ❌ Loss": f"{d['wins']}W / {d['losses']}L",
+            "🎯 Win Rate": f"{wr:.1f}%",
+            "💰 Net PnL": f"${d['net_usd']:+.2f}",
+            "Status": badge
+        })
+    return rows
 
 # ==========================================
 # 5. الشريط الجانبي (إعدادات الفيوتشر والتصفير)
@@ -601,7 +652,7 @@ def live_dashboard():
     for sym in needed_tickers:
         try:
             live_prices[sym] = exchange.fetch_ticker(sym)['last']
-        except:
+        except Exception:
             pass
 
     dfs_cache = {}
@@ -627,10 +678,10 @@ def live_dashboard():
     with comp_col1:
         s_color = "#00ff00" if classic_state['realized_pnl'] >= 20.0 else "#ff4b4b"
         st.markdown(
-            f"<div style='padding:12px; border-radius:10px; background-color:#1e2129; border-left: 5px solid #3498db;'>"
-            f"<b>🐢 Classic Swing ({swing_leverage}x | ${swing_margin:.0f}/trade)</b><br>"
+            f"<div style='padding:14px; margin-bottom:10px; border-radius:10px; background-color:#1e2129; color:#ffffff; border-left: 5px solid #3498db;'>"
+            f"<b style='color:#ffffff; font-size:15px;'>🐢 Classic Swing ({swing_leverage}x | ${swing_margin:.0f}/trade)</b><br>"
             f"<span style='font-size:24px; color:{s_color}; font-weight:bold;'>${classic_state['realized_pnl']:.2f}</span><br>"
-            f"<small>Active: {s_act} | Closed: {s_tot} | Win Rate: <b>{s_wr:.1f}%</b></small>"
+            f"<span style='color:#e2e8f0; font-size:13px;'>Active: {s_act} | Closed: {s_tot} | Win Rate: <b style='color:#ffffff;'>{s_wr:.1f}%</b></span>"
             f"</div>",
             unsafe_allow_html=True
         )
@@ -638,13 +689,20 @@ def live_dashboard():
     with comp_col2:
         f_color = "#00ff00" if fast_state['realized_pnl'] >= 20.0 else "#ff4b4b"
         st.markdown(
-            f"<div style='padding:12px; border-radius:10px; background-color:#1e2129; border-left: 5px solid #f39c12;'>"
-            f"<b>⚡ Fast Swing ({fast_leverage}x | ${fast_margin:.0f}/trade)</b><br>"
+            f"<div style='padding:14px; margin-bottom:10px; border-radius:10px; background-color:#1e2129; color:#ffffff; border-left: 5px solid #f39c12;'>"
+            f"<b style='color:#ffffff; font-size:15px;'>⚡ Fast Swing ({fast_leverage}x | ${fast_margin:.0f}/trade)</b><br>"
             f"<span style='font-size:24px; color:{f_color}; font-weight:bold;'>${fast_state['realized_pnl']:.2f}</span><br>"
-            f"<small>Active: {f_act} | Closed: {f_tot} | Win Rate: <b>{f_wr:.1f}%</b></small>"
+            f"<span style='color:#e2e8f0; font-size:13px;'>Active: {f_act} | Closed: {f_tot} | Win Rate: <b style='color:#ffffff;'>{f_wr:.1f}%</b></span>"
             f"</div>",
             unsafe_allow_html=True
         )
+
+    st.markdown("### 📊 Coin Performance Ranking (Best to Worst)")
+    coin_rows = build_coin_stats(classic_state, fast_state)
+    if coin_rows:
+        st.dataframe(coin_rows, use_container_width=True, hide_index=True)
+    else:
+        st.info("No closed trades yet to rank coins.")
 
     st.markdown("---")
 
