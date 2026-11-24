@@ -218,14 +218,25 @@ def calc_stats(state):
     active_count = sum(1 for t in state['active_trades'].values() if not t.get('trade_closed', False))
     return total, wins, win_rate, active_count
 
-def build_coin_stats(classic_state, fast_state):
+def build_coin_stats(state):
     stats = {}
-    for state in [classic_state, fast_state]:
-        for ct in state.get('closed_trades', []):
-            sym = ct.get('symbol')
-            pnl = float(ct.get('net_pnl_usd', 0.0))
-            if not sym:
-                continue
+    for ct in state.get('closed_trades', []):
+        sym = ct.get('symbol')
+        pnl = float(ct.get('net_pnl_usd', 0.0))
+        if not sym:
+            continue
+        if sym not in stats:
+            stats[sym] = {'trades': 0, 'wins': 0, 'losses': 0, 'net_usd': 0.0}
+        stats[sym]['trades'] += 1
+        stats[sym]['net_usd'] += pnl
+        if pnl > 0:
+            stats[sym]['wins'] += 1
+        else:
+            stats[sym]['losses'] += 1
+
+    for sym, tr in state.get('active_trades', {}).items():
+        if tr.get('trade_closed', False):
+            pnl = float(tr.get('fixed_net_usd', 0.0))
             if sym not in stats:
                 stats[sym] = {'trades': 0, 'wins': 0, 'losses': 0, 'net_usd': 0.0}
             stats[sym]['trades'] += 1
@@ -234,18 +245,6 @@ def build_coin_stats(classic_state, fast_state):
                 stats[sym]['wins'] += 1
             else:
                 stats[sym]['losses'] += 1
-
-        for sym, tr in state.get('active_trades', {}).items():
-            if tr.get('trade_closed', False):
-                pnl = float(tr.get('fixed_net_usd', 0.0))
-                if sym not in stats:
-                    stats[sym] = {'trades': 0, 'wins': 0, 'losses': 0, 'net_usd': 0.0}
-                stats[sym]['trades'] += 1
-                stats[sym]['net_usd'] += pnl
-                if pnl > 0:
-                    stats[sym]['wins'] += 1
-                else:
-                    stats[sym]['losses'] += 1
 
     rows = []
     sorted_coins = sorted(stats.items(), key=lambda x: (x[1]['net_usd'], x[1]['wins']), reverse=True)
@@ -262,11 +261,10 @@ def build_coin_stats(classic_state, fast_state):
 
         rows.append({
             "🪙 Coin": sym,
-            "📊 Trades": d['trades'],
-            "✅ Win / ❌ Loss": f"{d['wins']}W / {d['losses']}L",
-            "🎯 Win Rate": f"{wr:.1f}%",
             "💰 Net PnL": f"${d['net_usd']:+.2f}",
-            "Status": badge
+            "Status": badge,
+            "✅ W/L": f"{d['wins']}W / {d['losses']}L",
+            "🎯 Win%": f"{wr:.0f}%"
         })
     return rows
 
@@ -697,12 +695,24 @@ def live_dashboard():
             unsafe_allow_html=True
         )
 
-    st.markdown("### 📊 Coin Performance Ranking (Best to Worst)")
-    coin_rows = build_coin_stats(classic_state, fast_state)
-    if coin_rows:
-        st.dataframe(coin_rows, use_container_width=True, hide_index=True)
-    else:
-        st.info("No closed trades yet to rank coins.")
+    st.markdown("### 📊 Coin Performance Ranking (By Strategy)")
+    rank_col1, rank_col2 = st.columns(2)
+
+    with rank_col1:
+        st.markdown("#### 🐢 Classic Swing Top Picks")
+        classic_coins = build_coin_stats(classic_state)
+        if classic_coins:
+            st.dataframe(classic_coins, use_container_width=True, hide_index=True)
+        else:
+            st.info("No closed trades in Classic Swing yet.")
+
+    with rank_col2:
+        st.markdown("#### ⚡ Fast Swing Top Picks")
+        fast_coins = build_coin_stats(fast_state)
+        if fast_coins:
+            st.dataframe(fast_coins, use_container_width=True, hide_index=True)
+        else:
+            st.info("No closed trades in Fast Swing yet.")
 
     st.markdown("---")
 
