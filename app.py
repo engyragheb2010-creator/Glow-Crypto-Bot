@@ -1,4 +1,4 @@
-import streamlit as st
+ import streamlit as st
 import ccxt
 import pandas as pd
 import pandas_ta as ta
@@ -20,8 +20,8 @@ def now_cairo():
 # ==========================================
 # 1. إعدادات الشاشة والربط السحابي (JSONBin)
 # ==========================================
-st.set_page_config(page_title="SMC Sniper Bot - Auto Dual Swing", layout="wide")
-st.title("🤖 SMC Sniper Bot — 🐢 Classic Swing vs ⚡ Fast Swing (Futures)")
+st.set_page_config(page_title="SMC Sniper Bot - Classic Swing (5x)", layout="wide")
+st.title("🤖 SMC Sniper Bot — 🐢 Classic Swing (Futures 5x)")
 
 # حطي الكودين بتوعك من موقع jsonbin.io هنا بين علامات التنصيص:
 JSONBIN_BIN_ID = "6b02bc93ffd5d16053d55d5d"
@@ -45,8 +45,7 @@ def get_default_strategy_state(start_balance=20.0):
 
 def get_default_data():
     return {
-        'swing': get_default_strategy_state(20.0),
-        'scalping': get_default_strategy_state(20.0)  # يحتفظ بنفس المفتاح السحابي لعدم فقدان الرصيد والأرشيف
+        'swing': get_default_strategy_state(20.0)
     }
 
 def is_cloud_configured():
@@ -59,11 +58,10 @@ def normalize_data(raw_data):
     default = get_default_data()
     if not isinstance(raw_data, dict):
         return default
-    if 'swing' in raw_data and 'scalping' in raw_data:
-        for key in ['swing', 'scalping']:
-            for field, val in get_default_strategy_state().items():
-                if field not in raw_data[key]:
-                    raw_data[key][field] = val
+    if 'swing' in raw_data and isinstance(raw_data['swing'], dict):
+        for field, val in get_default_strategy_state().items():
+            if field not in raw_data['swing']:
+                raw_data['swing'][field] = val
         return raw_data
     if 'active_trades' in raw_data:
         default['swing'] = {
@@ -131,7 +129,8 @@ except Exception as e:
 # ==========================================
 # 4. دوال جلب البيانات والمؤشرات والإحصائيات
 # ==========================================
-def _build_df(symbol, timeframe, limit=250):
+@st.cache_data(ttl=120)
+def fetch_data_slow(symbol, timeframe, limit=250):
     try:
         bars = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
         df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -156,14 +155,6 @@ def _build_df(symbol, timeframe, limit=250):
         return df
     except Exception:
         return None
-
-@st.cache_data(ttl=120)
-def fetch_data_slow(symbol, timeframe, limit=250):
-    return _build_df(symbol, timeframe, limit)
-
-@st.cache_data(ttl=30)
-def fetch_data_fast(symbol, timeframe, limit=250):
-    return _build_df(symbol, timeframe, limit)
 
 def check_auto_adx(adx_curr, adx_prev, adx_strong=18.0, adx_rising_min=14.0):
     return (adx_curr > adx_strong) or (adx_curr > adx_rising_min and adx_curr > adx_prev)
@@ -269,9 +260,9 @@ def build_coin_stats(state):
     return rows
 
 # ==========================================
-# 5. الشريط الجانبي (إعدادات الفيوتشر والتصفير)
+# 5. الشريط الجانبي (إعدادات Classic Swing 5x)
 # ==========================================
-st.sidebar.markdown("### ⚙️ Futures Settings")
+st.sidebar.markdown("### ⚙️ Classic Swing Settings")
 if is_cloud_configured():
     st.sidebar.success("☁️ Cloud Memory: Connected")
 else:
@@ -280,39 +271,18 @@ else:
 st.sidebar.caption("🤖 Auto-ADX: Active (Enters on ADX > 18 or Rising > 14)")
 st.sidebar.caption("💸 OKX Futures Fee: 0.10% (0.05% In + 0.05% Out)")
 
-st.sidebar.markdown("#### 🐢 Classic Swing (1h / 15m)")
-swing_margin = st.sidebar.number_input("Classic Margin / Trade ($):", min_value=1.0, value=5.0, step=1.0)
-swing_leverage = st.sidebar.slider("Classic Leverage (x):", min_value=1, max_value=20, value=3)
+swing_margin = st.sidebar.number_input("Margin / Trade ($):", min_value=1.0, value=5.0, step=1.0)
+swing_leverage = st.sidebar.slider("Leverage (x):", min_value=1, max_value=20, value=5)
 st.sidebar.caption(f"Position Size: **${swing_margin * swing_leverage:.0f}** | Est. Fee: **${swing_margin * swing_leverage * OKX_ROUND_TRIP_FEE:.3f}**")
 
-st.sidebar.markdown("#### ⚡ Fast Swing (15m / 5m)")
-fast_margin = st.sidebar.number_input("Fast Swing Margin / Trade ($):", min_value=1.0, value=5.0, step=1.0)
-fast_leverage = st.sidebar.slider("Fast Swing Leverage (x):", min_value=1, max_value=20, value=3)
-st.sidebar.caption(f"Position Size: **${fast_margin * fast_leverage:.0f}** | Est. Fee: **${fast_margin * fast_leverage * OKX_ROUND_TRIP_FEE:.3f}**")
-
 st.sidebar.markdown("---")
-new_cap = st.sidebar.number_input("Starting Capital per Mode ($):", min_value=1.0, value=20.0, step=1.0)
+new_cap = st.sidebar.number_input("Starting Capital ($):", min_value=1.0, value=20.0, step=1.0)
 
-if st.sidebar.button("🔄 Reset BOTH Modes"):
-    st.session_state.bot_data = {
-        'swing': get_default_strategy_state(new_cap),
-        'scalping': get_default_strategy_state(new_cap)
-    }
+if st.sidebar.button("🔄 Reset Classic Swing"):
+    st.session_state.bot_data['swing'] = get_default_strategy_state(new_cap)
     save_data()
-    st.sidebar.success("Both portfolios reset!")
+    st.sidebar.success("Classic Swing portfolio reset!")
     st.rerun()
-
-col_r1, col_r2 = st.sidebar.columns(2)
-with col_r1:
-    if st.button("Reset Classic"):
-        st.session_state.bot_data['swing'] = get_default_strategy_state(new_cap)
-        save_data()
-        st.rerun()
-with col_r2:
-    if st.button("Reset Fast"):
-        st.session_state.bot_data['scalping'] = get_default_strategy_state(new_cap)
-        save_data()
-        st.rerun()
 
 # ==========================================
 # 6. محرك التحديث والرادار (مع حساب الفيوتشر والعمولة)
@@ -352,7 +322,7 @@ def update_active_trades(state, live_prices, cooldown_mins, default_margin, defa
                 trade['sl'] = trade['entry']
                 changed = True
 
-        # TP2 أو SL (التنفيذ على السعر المحدد للأمر مثل OKX الحقيقي)
+        # TP2 أو SL
         if (tp2_reached and price_pnl_pct > 0 or sl_hit) and not trade.get('trade_closed', False):
             trade['close_time_str'] = now_cairo().strftime('%Y-%m-%d %I:%M:%S %p')
 
@@ -525,7 +495,7 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
 
     return radar_rows, changed
 
-def render_strategy_tab(strategy_key, state, live_prices, radar_rows, cooldown_mins, default_margin, default_lev):
+def render_strategy_section(state, live_prices, radar_rows, cooldown_mins, default_margin, default_lev):
     st.markdown(f"### 🟢 Active Trades (Max: {MAX_ACTIVE_TRADES})")
     if not state['active_trades']:
         st.info("No active trades right now. Scanning market...")
@@ -569,7 +539,7 @@ def render_strategy_tab(strategy_key, state, live_prices, radar_rows, cooldown_m
             - <span style='color:#ff4b4b'>**🛑 SL:** ${trade['sl']:.4f}</span>
             """, unsafe_allow_html=True)
 
-            if st.button(f"Move {sym} to Archive", key=f"rem_act_{strategy_key}_{sym}"):
+            if st.button(f"Move {sym} to Archive", key=f"rem_act_swing_{sym}"):
                 close_time_str = trade.get('close_time_str', now_cairo().strftime('%Y-%m-%d %I:%M:%S %p'))
                 state['closed_trades'].append({
                     'symbol': sym, 'side': side,
@@ -601,7 +571,7 @@ def render_strategy_tab(strategy_key, state, live_prices, radar_rows, cooldown_m
                 - **Net PnL:** <span style='color:{c_color}'><b>${net_usd:+.2f} ({ct['final_pnl']:+.1f}% ROI)</b></span>
                 - **📥 Opened:** {ct['open_time']} | **📤 Closed:** {ct['close_time']} ({ct['duration']})
                 """, unsafe_allow_html=True)
-                if st.button("Delete Record", key=f"rem_cls_{strategy_key}_{orig_idx}"):
+                if st.button("Delete Record", key=f"rem_cls_swing_{orig_idx}"):
                     state['closed_trades'].pop(orig_idx)
                     save_data()
                     st.rerun()
@@ -623,16 +593,6 @@ CLASSIC_SWING_CONFIG = {
     'cooldown_mins': 60
 }
 
-FAST_SWING_CONFIG = {
-    'htf': '15m', 'ltf': '5m',
-    'adx_strong': 17.0, 'adx_rising_min': 13.0,
-    'rsi_buy': (48, 70), 'rsi_sell': (30, 52),
-    'tp1_mult': 1.5, 'tp2_mult': 3.0, 'sl_mult': 1.6, 'min_tp': 0.010,
-    'htf_tp1': 1.8, 'htf_tp2': 3.5, 'htf_sl': 1.8, 'htf_min_tp': 0.015,
-    'htf_label': "⚡ Fast Pro (15m)", 'ltf_label': "⚡ Fast Swing (5m)",
-    'cooldown_mins': 30
-}
-
 @st.fragment(run_every=15)
 def live_dashboard():
     col1, col2 = st.columns([1, 2])
@@ -643,9 +603,8 @@ def live_dashboard():
         st.caption(f"🕒 Cairo Time: {now_cairo().strftime('%I:%M:%S %p')} (Auto-refreshes every 15s)")
 
     classic_state = st.session_state.bot_data['swing']
-    fast_state = st.session_state.bot_data['scalping']
 
-    needed_tickers = set(classic_state['active_trades'].keys()) | set(fast_state['active_trades'].keys())
+    needed_tickers = set(classic_state['active_trades'].keys())
     live_prices = {}
     for sym in needed_tickers:
         try:
@@ -657,71 +616,34 @@ def live_dashboard():
     for sym in SYMBOLS:
         dfs_cache[(sym, '1h')] = fetch_data_slow(sym, '1h')
         dfs_cache[(sym, '15m')] = fetch_data_slow(sym, '15m')
-        dfs_cache[(sym, '5m')] = fetch_data_fast(sym, '5m')
 
     c1 = update_active_trades(classic_state, live_prices, CLASSIC_SWING_CONFIG['cooldown_mins'], swing_margin, swing_leverage)
-    c2 = update_active_trades(fast_state, live_prices, FAST_SWING_CONFIG['cooldown_mins'], fast_margin, fast_leverage)
-    classic_radar, c3 = scan_swing_mode(classic_state, CLASSIC_SWING_CONFIG, dfs_cache, swing_margin, swing_leverage)
-    fast_radar, c4 = scan_swing_mode(fast_state, FAST_SWING_CONFIG, dfs_cache, fast_margin, fast_leverage)
+    classic_radar, c2 = scan_swing_mode(classic_state, CLASSIC_SWING_CONFIG, dfs_cache, swing_margin, swing_leverage)
 
-    if c1 or c2 or c3 or c4:
+    if c1 or c2:
         save_data()
 
     s_tot, s_win, s_wr, s_act = calc_stats(classic_state)
-    f_tot, f_win, f_wr, f_act = calc_stats(fast_state)
+    bal = classic_state['realized_pnl']
+    s_color = "#00ff00" if bal >= 20.0 else "#ff4b4b"
 
-    st.markdown("### 🏆 Live Comparison: Classic Swing vs Fast Swing (After OKX Fees)")
-    comp_col1, comp_col2 = st.columns(2)
+    st.markdown(
+        f"<div style='padding:16px; margin-bottom:12px; border-radius:10px; background-color:#1e2129; color:#ffffff; border-left: 5px solid #3498db;'>"
+        f"<b style='color:#ffffff; font-size:16px;'>🐢 Classic Swing Portfolio ({swing_leverage}x | ${swing_margin:.0f}/trade — After OKX Fees)</b><br>"
+        f"<span style='font-size:28px; color:{s_color}; font-weight:bold;'>${bal:.2f}</span><br>"
+        f"<span style='color:#e2e8f0; font-size:14px;'>Active: <b>{s_act}</b> | Closed: <b>{s_tot}</b> | Win Rate: <b style='color:#ffffff;'>{s_wr:.1f}%</b></span>"
+        f"</div>",
+        unsafe_allow_html=True
+    )
 
-    with comp_col1:
-        s_color = "#00ff00" if classic_state['realized_pnl'] >= 20.0 else "#ff4b4b"
-        st.markdown(
-            f"<div style='padding:14px; margin-bottom:10px; border-radius:10px; background-color:#1e2129; color:#ffffff; border-left: 5px solid #3498db;'>"
-            f"<b style='color:#ffffff; font-size:15px;'>🐢 Classic Swing ({swing_leverage}x | ${swing_margin:.0f}/trade)</b><br>"
-            f"<span style='font-size:24px; color:{s_color}; font-weight:bold;'>${classic_state['realized_pnl']:.2f}</span><br>"
-            f"<span style='color:#e2e8f0; font-size:13px;'>Active: {s_act} | Closed: {s_tot} | Win Rate: <b style='color:#ffffff;'>{s_wr:.1f}%</b></span>"
-            f"</div>",
-            unsafe_allow_html=True
-        )
-
-    with comp_col2:
-        f_color = "#00ff00" if fast_state['realized_pnl'] >= 20.0 else "#ff4b4b"
-        st.markdown(
-            f"<div style='padding:14px; margin-bottom:10px; border-radius:10px; background-color:#1e2129; color:#ffffff; border-left: 5px solid #f39c12;'>"
-            f"<b style='color:#ffffff; font-size:15px;'>⚡ Fast Swing ({fast_leverage}x | ${fast_margin:.0f}/trade)</b><br>"
-            f"<span style='font-size:24px; color:{f_color}; font-weight:bold;'>${fast_state['realized_pnl']:.2f}</span><br>"
-            f"<span style='color:#e2e8f0; font-size:13px;'>Active: {f_act} | Closed: {f_tot} | Win Rate: <b style='color:#ffffff;'>{f_wr:.1f}%</b></span>"
-            f"</div>",
-            unsafe_allow_html=True
-        )
-
-    st.markdown("### 📊 Coin Performance Ranking (By Strategy)")
-    rank_col1, rank_col2 = st.columns(2)
-
-    with rank_col1:
-        st.markdown("#### 🐢 Classic Swing Top Picks")
-        classic_coins = build_coin_stats(classic_state)
-        if classic_coins:
-            st.dataframe(classic_coins, use_container_width=True, hide_index=True)
-        else:
-            st.info("No closed trades in Classic Swing yet.")
-
-    with rank_col2:
-        st.markdown("#### ⚡ Fast Swing Top Picks")
-        fast_coins = build_coin_stats(fast_state)
-        if fast_coins:
-            st.dataframe(fast_coins, use_container_width=True, hide_index=True)
-        else:
-            st.info("No closed trades in Fast Swing yet.")
+    st.markdown("### 🏆 Classic Swing Top Picks")
+    classic_coins = build_coin_stats(classic_state)
+    if classic_coins:
+        st.dataframe(classic_coins, use_container_width=True, hide_index=True)
+    else:
+        st.info("No closed trades in Classic Swing yet.")
 
     st.markdown("---")
-
-    tab_classic, tab_fast = st.tabs([f"🐢 Classic Swing ({s_act} Active)", f"⚡ Fast Swing ({f_act} Active)"])
-
-    with tab_classic:
-        render_strategy_tab("swing", classic_state, live_prices, classic_radar, CLASSIC_SWING_CONFIG['cooldown_mins'], swing_margin, swing_leverage)
-
-    with tab_fast:
-        render_strategy_tab("scalping", fast_state, live_prices, fast_radar, FAST_SWING_CONFIG['cooldown_mins'], fast_margin, fast_leverage)
+    render_strategy_section(classic_state, live_prices, classic_radar, CLASSIC_SWING_CONFIG['cooldown_mins'], swing_margin, swing_leverage)
 
 live_dashboard()
