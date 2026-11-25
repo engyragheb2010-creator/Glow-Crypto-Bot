@@ -30,7 +30,7 @@ JSONBIN_API_KEY = "$2a$10$Y2gG93ZSPm0TetpeSZzUJOjJejPRL42P17olP0s3edOSXMlmWCkFi"
 # ==========================================
 # 2. إعدادات العملات والعمولة والذاكرة السحابية
 # ==========================================
-SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'LINK/USDT', 'NEAR/USDT', 'SUI/USDT', 'AVAX/USDT', 'ADA/USDT', 'XRP/USDT']
+SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'NEAR/USDT', 'SUI/USDT', 'AVAX/USDT', 'ADA/USDT', 'XRP/USDT']
 MAX_ACTIVE_TRADES = 10
 DATA_FILE = 'trades_data_dual.json'
 OKX_ROUND_TRIP_FEE = 0.001  # 0.05% دخول + 0.05% خروج (Taker Fee على OKX Futures)
