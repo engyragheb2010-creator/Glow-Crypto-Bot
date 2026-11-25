@@ -23,15 +23,23 @@ def now_cairo():
 st.set_page_config(page_title="SMC Sniper Bot - Classic Swing (5x)", layout="wide")
 st.title("🤖 SMC Sniper Bot — 🐢 Classic Swing (Futures 5x)")
 
-# حطي الكودين بتوعك من موقع jsonbin.io هنا بين علامات التنصيص:
+# مفاتيح الربط السحابي الخاصة بك
 JSONBIN_BIN_ID = "6b02bc93ffd5d16053d55d5d"
 JSONBIN_API_KEY = "$2a$10$Y2gG93ZSPm0TetpeSZzUJOjJejPRL42P17olP0s3edOSXMlmWCkFi"
 
 # ==========================================
 # 2. إعدادات العملات والعمولة والذاكرة السحابية
 # ==========================================
-SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'SOL/USDT', 'NEAR/USDT', 'SUI/USDT', 'AVAX/USDT', 'ADA/USDT', 'XRP/USDT']
-MAX_ACTIVE_TRADES = 10
+SYMBOLS = ['SUI/USDT', 'SOL/USDT', 'AVAX/USDT', 'NEAR/USDT', 'BNB/USDT', 'XRP/USDT']
+SYMBOL_PRIORITY = {
+    'SUI/USDT': 6,
+    'SOL/USDT': 5,
+    'AVAX/USDT': 4,
+    'NEAR/USDT': 3,
+    'BNB/USDT': 2,
+    'XRP/USDT': 1
+}
+MAX_ACTIVE_TRADES = 2
 DATA_FILE = 'trades_data_dual.json'
 OKX_ROUND_TRIP_FEE = 0.001  # 0.05% دخول + 0.05% خروج (Taker Fee على OKX Futures)
 
@@ -161,7 +169,7 @@ def check_auto_adx(adx_curr, adx_prev, adx_strong=18.0, adx_rising_min=14.0):
 
 def analyze_smc(df, adx_strong=18.0, adx_rising_min=14.0, rsi_buy=(50, 68), rsi_sell=(32, 50)):
     if df is None or len(df) < 200:
-        return 'NONE', 0.0
+        return 'NONE', 0.0, 0.0
 
     closed_candle = df['close'].iloc[-2]
     prev_high = df['high'].iloc[-3]
@@ -180,14 +188,14 @@ def analyze_smc(df, adx_strong=18.0, adx_rising_min=14.0, rsi_buy=(50, 68), rsi_
     adx_p = float(prev_adx) if (prev_adx is not None and not pd.isna(prev_adx)) else 0.0
 
     if not check_auto_adx(adx, adx_p, adx_strong, adx_rising_min):
-        return 'NONE', 0.0
+        return 'NONE', 0.0, adx
 
     if ema_50 > ema_200 and closed_candle > ema_50 and closed_candle > prev_high and rsi_buy[0] < rsi < rsi_buy[1]:
-        return 'BUY', atr_val
+        return 'BUY', atr_val, adx
     elif ema_50 < ema_200 and closed_candle < ema_50 and closed_candle < prev_low and rsi_sell[0] < rsi < rsi_sell[1]:
-        return 'SELL', atr_val
+        return 'SELL', atr_val, adx
 
-    return 'NONE', 0.0
+    return 'NONE', 0.0, adx
 
 def format_duration(seconds):
     mins = int(seconds // 60)
@@ -268,12 +276,12 @@ if is_cloud_configured():
 else:
     st.sidebar.warning("⚠️ Cloud Memory: Not Connected")
 
-st.sidebar.caption("🤖 Auto-ADX: Active (Enters on ADX > 18 or Rising > 14)")
+st.sidebar.caption("🤖 Best-Signal Filter: Active (Max 2 Trades)")
 st.sidebar.caption("💸 OKX Futures Fee: 0.10% (0.05% In + 0.05% Out)")
 
-swing_margin = st.sidebar.number_input("Margin / Trade ($):", min_value=1.0, value=5.0, step=1.0)
+swing_margin = st.sidebar.number_input("Margin / Trade ($):", min_value=1.0, value=9.5, step=0.5)
 swing_leverage = st.sidebar.slider("Leverage (x):", min_value=1, max_value=20, value=5)
-st.sidebar.caption(f"Position Size: **${swing_margin * swing_leverage:.0f}** | Est. Fee: **${swing_margin * swing_leverage * OKX_ROUND_TRIP_FEE:.3f}**")
+st.sidebar.caption(f"Position Size: **${swing_margin * swing_leverage:.2f}** | Est. Fee: **${swing_margin * swing_leverage * OKX_ROUND_TRIP_FEE:.3f}**")
 
 st.sidebar.markdown("---")
 new_cap = st.sidebar.number_input("Starting Capital ($):", min_value=1.0, value=20.0, step=1.0)
@@ -285,7 +293,7 @@ if st.sidebar.button("🔄 Reset Classic Swing"):
     st.rerun()
 
 # ==========================================
-# 6. محرك التحديث والرادار (مع حساب الفيوتشر والعمولة)
+# 6. محرك التحديث والرادار (مع فلتر أقوى إشارة)
 # ==========================================
 def update_active_trades(state, live_prices, cooldown_mins, default_margin, default_lev):
     changed = False
@@ -307,7 +315,7 @@ def update_active_trades(state, live_prices, cooldown_mins, default_margin, defa
             tp1_reached = live_price <= trade['tp1']
             sl_hit = live_price >= trade['sl']
 
-        # TP1 (إغلاق 50% من الصفقة وخصم عمولة النصف ده)
+        # TP1 (إغلاق 50% من الصفقة وخصم عمولة النصف ده + نقل الاستوب للدخول)
         if tp1_reached and price_pnl_pct > 0 and not tp2_reached and not sl_hit and not trade.get('trade_closed', False):
             if not trade.get('tp1_hit', False):
                 tp1_pct = abs((trade['tp1'] - trade['entry']) / trade['entry']) * 100
@@ -376,6 +384,7 @@ def update_active_trades(state, live_prices, cooldown_mins, default_margin, defa
 
 def scan_swing_mode(state, config, dfs_cache, margin, leverage):
     radar_rows = []
+    candidates = []
     now_epoch = time.time()
     changed = False
 
@@ -383,6 +392,7 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
     adx_strong = config['adx_strong']
     adx_rising_min = config['adx_rising_min']
     rsi_buy, rsi_sell = config['rsi_buy'], config['rsi_sell']
+    open_count = sum(1 for t in state['active_trades'].values() if not t.get('trade_closed', False))
 
     for sym in SYMBOLS:
         df_htf = dfs_cache.get((sym, htf))
@@ -391,8 +401,8 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
             continue
 
         current_price = df_ltf['close'].iloc[-1]
-        sig_htf, _ = analyze_smc(df_htf, adx_strong=adx_strong, adx_rising_min=adx_rising_min, rsi_buy=rsi_buy, rsi_sell=rsi_sell)
-        sig_ltf, _ = analyze_smc(df_ltf, adx_strong=adx_strong, adx_rising_min=adx_rising_min, rsi_buy=rsi_buy, rsi_sell=rsi_sell)
+        sig_htf, _, adx_htf = analyze_smc(df_htf, adx_strong=adx_strong, adx_rising_min=adx_rising_min, rsi_buy=rsi_buy, rsi_sell=rsi_sell)
+        sig_ltf, _, _ = analyze_smc(df_ltf, adx_strong=adx_strong, adx_rising_min=adx_rising_min, rsi_buy=rsi_buy, rsi_sell=rsi_sell)
         vol_ltf = df_ltf['volume'].iloc[-1]
 
         raw_atr = df_ltf['ATR'].iloc[-2]
@@ -415,8 +425,6 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
         prev_high = df_ltf['high'].iloc[-3]
         prev_low = df_ltf['low'].iloc[-3]
 
-        open_count = sum(1 for t in state['active_trades'].values() if not t.get('trade_closed', False))
-
         if sym in state['active_trades']:
             t_obj = state['active_trades'][sym]
             if t_obj.get('trade_closed', False):
@@ -428,7 +436,7 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
             rem = int((state['cooldowns'][sym] - now_epoch) // 60)
             status = f"🛌 Resting ({rem}m left)"
         elif open_count >= MAX_ACTIVE_TRADES:
-            status = "⏸️ Max Trades Reached"
+            status = f"⏸️ Max Trades ({open_count}/{MAX_ACTIVE_TRADES})"
         elif not check_auto_adx(adx_val, adx_prev_val, adx_strong, adx_rising_min):
             status = f"😴 Flat Market (ADX {adx_val:.1f} {adx_dir})"
         else:
@@ -454,26 +462,29 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
             "Status": status
         })
 
+        # تخطي العملة لو مشغولة أو في فترة راحة أو وصلنا للحد الأقصى (2 صفقة)
         if sym in state['active_trades'] or open_count >= MAX_ACTIVE_TRADES:
             continue
         if sym in state['cooldowns'] and now_epoch < state['cooldowns'][sym]:
             continue
 
         eff_atr = atr_val if atr_val > 0 else (current_price * 0.01)
-        now_str = now_cairo().strftime('%Y-%m-%d %I:%M:%S %p')
-
-        entry_side, mode_label = None, None
+        entry_side, mode_label, tf_priority, sig_adx = None, None, 0, 0.0
         tp1_mult, tp2_mult, sl_mult, min_tp = config['tp1_mult'], config['tp2_mult'], config['sl_mult'], config['min_tp']
 
         if sig_htf in ['BUY', 'SELL']:
             entry_side = sig_htf
             mode_label = config['htf_label']
+            tf_priority = 2  # أولوية أعلى لفريم الساعة
+            sig_adx = adx_htf
             raw_htf_atr = df_htf['ATR'].iloc[-2]
             eff_atr = float(raw_htf_atr) if (raw_htf_atr is not None and not pd.isna(raw_htf_atr) and raw_htf_atr > 0) else (current_price * 0.015)
             tp1_mult, tp2_mult, sl_mult, min_tp = config['htf_tp1'], config['htf_tp2'], config['htf_sl'], config['htf_min_tp']
         elif (sig_ltf == 'BUY' and trend_htf_up) or (sig_ltf == 'SELL' and trend_htf_down):
             entry_side = sig_ltf
             mode_label = config['ltf_label']
+            tf_priority = 1
+            sig_adx = adx_val
 
         if entry_side:
             if entry_side == 'BUY':
@@ -485,20 +496,47 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
                 tp2 = current_price - max(eff_atr * tp2_mult, current_price * (min_tp * 2))
                 sl = current_price + max(eff_atr * sl_mult, current_price * (min_tp * 0.9))
 
-            state['active_trades'][sym] = {
-                'entry': current_price, 'tp1': tp1, 'tp2': tp2, 'sl': sl, 'original_sl': sl,
-                'mode': mode_label, 'side': entry_side, 'open_time': now_str,
-                'open_timestamp': time.time(), 'tp1_hit': False, 'tp2_hit': False, 'trade_closed': False,
-                'margin': margin, 'leverage': leverage
-            }
-            changed = True
+            candidates.append({
+                'sym': sym,
+                'entry': current_price,
+                'tp1': tp1,
+                'tp2': tp2,
+                'sl': sl,
+                'mode': mode_label,
+                'side': entry_side,
+                'rank_score': (tf_priority, sig_adx, SYMBOL_PRIORITY.get(sym, 0))
+            })
+
+    # اختيار أقوى إشارة واحدة فقط في الدورة الحالية بشرط وجود مكان فاضي من الصفقتين
+    if candidates and open_count < MAX_ACTIVE_TRADES:
+        candidates.sort(key=lambda x: x['rank_score'], reverse=True)
+        best = candidates[0]
+        now_str = now_cairo().strftime('%Y-%m-%d %I:%M:%S %p')
+
+        state['active_trades'][best['sym']] = {
+            'entry': best['entry'],
+            'tp1': best['tp1'],
+            'tp2': best['tp2'],
+            'sl': best['sl'],
+            'original_sl': best['sl'],
+            'mode': best['mode'],
+            'side': best['side'],
+            'open_time': now_str,
+            'open_timestamp': time.time(),
+            'tp1_hit': False,
+            'tp2_hit': False,
+            'trade_closed': False,
+            'margin': margin,
+            'leverage': leverage
+        }
+        changed = True
 
     return radar_rows, changed
 
 def render_strategy_section(state, live_prices, radar_rows, cooldown_mins, default_margin, default_lev):
     st.markdown(f"### 🟢 Active Trades (Max: {MAX_ACTIVE_TRADES})")
     if not state['active_trades']:
-        st.info("No active trades right now. Scanning market...")
+        st.info("No active trades right now. Scanning market for best signal...")
 
     for sym, trade in list(state['active_trades'].items()):
         live_price = live_prices.get(sym, trade['entry'])
@@ -629,9 +667,9 @@ def live_dashboard():
 
     st.markdown(
         f"<div style='padding:16px; margin-bottom:12px; border-radius:10px; background-color:#1e2129; color:#ffffff; border-left: 5px solid #3498db;'>"
-        f"<b style='color:#ffffff; font-size:16px;'>🐢 Classic Swing Portfolio ({swing_leverage}x | ${swing_margin:.0f}/trade — After OKX Fees)</b><br>"
+        f"<b style='color:#ffffff; font-size:16px;'>🐢 Classic Swing Portfolio ({swing_leverage}x | ${swing_margin:.2f}/trade — Best-Signal Filter)</b><br>"
         f"<span style='font-size:28px; color:{s_color}; font-weight:bold;'>${bal:.2f}</span><br>"
-        f"<span style='color:#e2e8f0; font-size:14px;'>Active: <b>{s_act}</b> | Closed: <b>{s_tot}</b> | Win Rate: <b style='color:#ffffff;'>{s_wr:.1f}%</b></span>"
+        f"<span style='color:#e2e8f0; font-size:14px;'>Active: <b>{s_act}/{MAX_ACTIVE_TRADES}</b> | Closed: <b>{s_tot}</b> | Win Rate: <b style='color:#ffffff;'>{s_wr:.1f}%</b></span>"
         f"</div>",
         unsafe_allow_html=True
     )
