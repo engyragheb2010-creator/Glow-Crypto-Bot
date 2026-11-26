@@ -164,16 +164,14 @@ def fetch_data_slow(symbol, timeframe, limit=250):
     except Exception:
         return None
 
-def check_auto_adx(adx_curr, adx_prev, adx_strong=18.0, adx_rising_min=14.0):
-    return (adx_curr > adx_strong) or (adx_curr > adx_rising_min and adx_curr > adx_prev)
-
-def analyze_smc(df, adx_strong=18.0, adx_rising_min=14.0, rsi_buy=(50, 68), rsi_sell=(32, 50)):
+def analyze_smc(df, adx_min=20.0, rsi_buy=(52, 62), rsi_sell=(38, 48), lookback=8):
     if df is None or len(df) < 200:
         return 'NONE', 0.0, 0.0
 
     closed_candle = df['close'].iloc[-2]
-    prev_high = df['high'].iloc[-3]
-    prev_low = df['low'].iloc[-3]
+    # كسر أعلى قمة أو أدنى قاع لعدد (lookback) شموع سابقة لمنع الكسر الكاذب لشمعة واحدة
+    swing_high = df['high'].iloc[-(lookback + 2):-2].max()
+    swing_low = df['low'].iloc[-(lookback + 2):-2].min()
 
     raw_atr = df['ATR'].iloc[-2]
     atr_val = float(raw_atr) if (raw_atr is not None and not pd.isna(raw_atr)) else 0.0
@@ -183,16 +181,15 @@ def analyze_smc(df, adx_strong=18.0, adx_rising_min=14.0, rsi_buy=(50, 68), rsi_
     rsi = df['RSI'].iloc[-2]
 
     raw_adx = df['ADX'].iloc[-2]
-    prev_adx = df['ADX'].iloc[-3]
     adx = float(raw_adx) if (raw_adx is not None and not pd.isna(raw_adx)) else 0.0
-    adx_p = float(prev_adx) if (prev_adx is not None and not pd.isna(prev_adx)) else 0.0
 
-    if not check_auto_adx(adx, adx_p, adx_strong, adx_rising_min):
+    # منع الدخول تماماً في السوق العرضي (ADX < 20)
+    if adx < adx_min:
         return 'NONE', 0.0, adx
 
-    if ema_50 > ema_200 and closed_candle > ema_50 and closed_candle > prev_high and rsi_buy[0] < rsi < rsi_buy[1]:
+    if ema_50 > ema_200 and closed_candle > ema_50 and closed_candle > swing_high and rsi_buy[0] < rsi < rsi_buy[1]:
         return 'BUY', atr_val, adx
-    elif ema_50 < ema_200 and closed_candle < ema_50 and closed_candle < prev_low and rsi_sell[0] < rsi < rsi_sell[1]:
+    elif ema_50 < ema_200 and closed_candle < ema_50 and closed_candle < swing_low and rsi_sell[0] < rsi < rsi_sell[1]:
         return 'SELL', atr_val, adx
 
     return 'NONE', 0.0, adx
@@ -276,7 +273,7 @@ if is_cloud_configured():
 else:
     st.sidebar.warning("⚠️ Cloud Memory: Not Connected")
 
-st.sidebar.caption(f"🤖 1H EMA Alignment + Best-Signal (Max {MAX_ACTIVE_TRADES} Trades)")
+st.sidebar.caption(f"🛡️ Anti-Chop Filter: ADX ≥ 20 + 8-Candle Breakout (Max {MAX_ACTIVE_TRADES})")
 st.sidebar.caption("💸 OKX Futures Fee: 0.10% (0.05% In + 0.05% Out)")
 
 swing_margin = st.sidebar.number_input("Margin / Trade ($):", min_value=1.0, value=5.0, step=0.5)
@@ -293,7 +290,7 @@ if st.sidebar.button("🔄 Reset Classic Swing"):
     st.rerun()
 
 # ==========================================
-# 6. محرك التحديث والرادار (مع فلتر اتجاه الساعة)
+# 6. محرك التحديث والرادار (مع فلاتر منع التذبذب)
 # ==========================================
 def update_active_trades(state, live_prices, cooldown_mins, default_margin, default_lev):
     changed = False
@@ -389,8 +386,7 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
     changed = False
 
     htf, ltf = config['htf'], config['ltf']
-    adx_strong = config['adx_strong']
-    adx_rising_min = config['adx_rising_min']
+    adx_min = config['adx_min']
     rsi_buy, rsi_sell = config['rsi_buy'], config['rsi_sell']
     open_count = sum(1 for t in state['active_trades'].values() if not t.get('trade_closed', False))
 
@@ -401,8 +397,8 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
             continue
 
         current_price = df_ltf['close'].iloc[-1]
-        sig_htf, _, adx_htf = analyze_smc(df_htf, adx_strong=adx_strong, adx_rising_min=adx_rising_min, rsi_buy=rsi_buy, rsi_sell=rsi_sell)
-        sig_ltf, _, _ = analyze_smc(df_ltf, adx_strong=adx_strong, adx_rising_min=adx_rising_min, rsi_buy=rsi_buy, rsi_sell=rsi_sell)
+        sig_htf, _, adx_htf = analyze_smc(df_htf, adx_min=adx_min, rsi_buy=rsi_buy, rsi_sell=rsi_sell, lookback=6)
+        sig_ltf, _, _ = analyze_smc(df_ltf, adx_min=adx_min, rsi_buy=rsi_buy, rsi_sell=rsi_sell, lookback=8)
         vol_ltf = df_ltf['volume'].iloc[-1]
 
         raw_atr = df_ltf['ATR'].iloc[-2]
@@ -417,7 +413,7 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
         raw_rsi = df_ltf['RSI'].iloc[-2]
         rsi_val = float(raw_rsi) if (raw_rsi is not None and not pd.isna(raw_rsi)) else 50.0
 
-        # تأكيد ترتيب متوسطات فريم الساعة (EMA50 مع EMA200) لمنع الدخول في ارتدادات وهمية
+        # تأكيد ترتيب متوسطات فريم الساعة (EMA50 مع EMA200)
         htf_close = df_htf['close'].iloc[-2]
         htf_ema50 = df_htf['EMA50'].iloc[-2]
         htf_ema200 = df_htf['EMA200'].iloc[-2]
@@ -427,8 +423,8 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
         ema50 = df_ltf['EMA50'].iloc[-2]
         ema200 = df_ltf['EMA200'].iloc[-2]
         closed_ltf = df_ltf['close'].iloc[-2]
-        prev_high = df_ltf['high'].iloc[-3]
-        prev_low = df_ltf['low'].iloc[-3]
+        swing_high_ltf = df_ltf['high'].iloc[-10:-2].max()
+        swing_low_ltf = df_ltf['low'].iloc[-10:-2].min()
 
         if sym in state['active_trades']:
             t_obj = state['active_trades'][sym]
@@ -442,20 +438,20 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
             status = f"🛌 Resting ({rem}m left)"
         elif open_count >= MAX_ACTIVE_TRADES:
             status = f"⏸️ Max Trades ({open_count}/{MAX_ACTIVE_TRADES})"
-        elif not check_auto_adx(adx_val, adx_prev_val, adx_strong, adx_rising_min):
-            status = f"😴 Flat Market (ADX {adx_val:.1f} {adx_dir})"
+        elif adx_val < adx_min:
+            status = f"😴 Choppy/Flat Market (ADX {adx_val:.1f} < {adx_min:.0f})"
         else:
             if trend_htf_up:
                 if ema50 <= ema200: status = f"⏳ Wait {ltf} EMA50>200 ({htf} Up)"
-                elif not (rsi_buy[0] < rsi_val < rsi_buy[1]): status = f"⏳ Wait RSI {rsi_buy[0]}-{rsi_buy[1]}"
+                elif not (rsi_buy[0] < rsi_val < rsi_buy[1]): status = f"⏳ Wait RSI {rsi_buy[0]}-{rsi_buy[1]} ({rsi_val:.1f})"
                 elif closed_ltf <= ema50: status = "⏳ Wait Close>EMA50"
-                elif closed_ltf <= prev_high: status = "⏳ Wait High Breakout"
+                elif closed_ltf <= swing_high_ltf: status = "⏳ Wait 2h High Breakout"
                 else: status = "👀 Ready (BUY)"
             elif trend_htf_down:
                 if ema50 >= ema200: status = f"⏳ Wait {ltf} EMA50<200 ({htf} Down)"
-                elif not (rsi_sell[0] < rsi_val < rsi_sell[1]): status = f"⏳ Wait RSI {rsi_sell[0]}-{rsi_sell[1]}"
+                elif not (rsi_sell[0] < rsi_val < rsi_sell[1]): status = f"⏳ Wait RSI {rsi_sell[0]}-{rsi_sell[1]} ({rsi_val:.1f})"
                 elif closed_ltf >= ema50: status = "⏳ Wait Close<EMA50"
-                elif closed_ltf >= prev_low: status = "⏳ Wait Low Breakout"
+                elif closed_ltf >= swing_low_ltf: status = "⏳ Wait 2h Low Breakout"
                 else: status = "👀 Ready (SELL)"
             else:
                 status = f"🔄 {htf} Trend Transition (Wait EMA50/200)"
@@ -543,7 +539,7 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
 def render_strategy_section(state, live_prices, radar_rows, cooldown_mins, default_margin, default_lev):
     st.markdown(f"### 🟢 Active Trades (Max: {MAX_ACTIVE_TRADES})")
     if not state['active_trades']:
-        st.info("No active trades right now. Scanning market for confirmed signals...")
+        st.info("No active trades right now. Waiting for strong trend breakout (ADX ≥ 20)...")
 
     for sym, trade in list(state['active_trades'].items()):
         live_price = live_prices.get(sym, trade['entry'])
@@ -630,8 +626,8 @@ def render_strategy_section(state, live_prices, radar_rows, cooldown_mins, defau
 # ==========================================
 CLASSIC_SWING_CONFIG = {
     'htf': '1h', 'ltf': '15m',
-    'adx_strong': 18.0, 'adx_rising_min': 14.0,
-    'rsi_buy': (50, 68), 'rsi_sell': (32, 50),
+    'adx_min': 20.0,
+    'rsi_buy': (52, 62), 'rsi_sell': (38, 48),
     'tp1_mult': 1.8, 'tp2_mult': 3.5, 'sl_mult': 1.8, 'min_tp': 0.015,
     'htf_tp1': 2.0, 'htf_tp2': 4.0, 'htf_sl': 2.0, 'htf_min_tp': 0.02,
     'htf_label': "🎯 Pro Swing (1h)", 'ltf_label': "🐢 Classic Swing (15m)",
