@@ -39,7 +39,7 @@ SYMBOL_PRIORITY = {
     'BNB/USDT': 2,
     'XRP/USDT': 1
 }
-MAX_ACTIVE_TRADES = 2
+MAX_ACTIVE_TRADES = 4
 DATA_FILE = 'trades_data_dual.json'
 OKX_ROUND_TRIP_FEE = 0.001  # 0.05% دخول + 0.05% خروج (Taker Fee على OKX Futures)
 
@@ -85,7 +85,7 @@ def load_data():
         try:
             url = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}/latest"
             headers = {"X-Master-Key": JSONBIN_API_KEY}
-            res = requests.get(url, headers=headers, timeout=10)
+            res = requests.get(url, headers=headers, timeout=15)
             if res.status_code == 200:
                 return normalize_data(res.json().get("record", {}))
         except Exception as e:
@@ -114,7 +114,7 @@ def save_data():
                 "Content-Type": "application/json",
                 "X-Master-Key": JSONBIN_API_KEY
             }
-            requests.put(url, json=data, headers=headers, timeout=10)
+            requests.put(url, json=data, headers=headers, timeout=15)
         except Exception as e:
             st.warning(f"Cloud save warning: {e}")
 
@@ -276,10 +276,10 @@ if is_cloud_configured():
 else:
     st.sidebar.warning("⚠️ Cloud Memory: Not Connected")
 
-st.sidebar.caption("🤖 Best-Signal Filter: Active (Max 2 Trades)")
+st.sidebar.caption(f"🤖 1H EMA Alignment + Best-Signal (Max {MAX_ACTIVE_TRADES} Trades)")
 st.sidebar.caption("💸 OKX Futures Fee: 0.10% (0.05% In + 0.05% Out)")
 
-swing_margin = st.sidebar.number_input("Margin / Trade ($):", min_value=1.0, value=9.5, step=0.5)
+swing_margin = st.sidebar.number_input("Margin / Trade ($):", min_value=1.0, value=5.0, step=0.5)
 swing_leverage = st.sidebar.slider("Leverage (x):", min_value=1, max_value=20, value=5)
 st.sidebar.caption(f"Position Size: **${swing_margin * swing_leverage:.2f}** | Est. Fee: **${swing_margin * swing_leverage * OKX_ROUND_TRIP_FEE:.3f}**")
 
@@ -293,7 +293,7 @@ if st.sidebar.button("🔄 Reset Classic Swing"):
     st.rerun()
 
 # ==========================================
-# 6. محرك التحديث والرادار (مع فلتر أقوى إشارة)
+# 6. محرك التحديث والرادار (مع فلتر اتجاه الساعة)
 # ==========================================
 def update_active_trades(state, live_prices, cooldown_mins, default_margin, default_lev):
     changed = False
@@ -417,8 +417,13 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
         raw_rsi = df_ltf['RSI'].iloc[-2]
         rsi_val = float(raw_rsi) if (raw_rsi is not None and not pd.isna(raw_rsi)) else 50.0
 
-        trend_htf_up = df_htf['close'].iloc[-2] > df_htf['EMA200'].iloc[-2]
-        trend_htf_down = df_htf['close'].iloc[-2] < df_htf['EMA200'].iloc[-2]
+        # تأكيد ترتيب متوسطات فريم الساعة (EMA50 مع EMA200) لمنع الدخول في ارتدادات وهمية
+        htf_close = df_htf['close'].iloc[-2]
+        htf_ema50 = df_htf['EMA50'].iloc[-2]
+        htf_ema200 = df_htf['EMA200'].iloc[-2]
+        trend_htf_up = (htf_ema50 > htf_ema200) and (htf_close > htf_ema50)
+        trend_htf_down = (htf_ema50 < htf_ema200) and (htf_close < htf_ema50)
+
         ema50 = df_ltf['EMA50'].iloc[-2]
         ema200 = df_ltf['EMA200'].iloc[-2]
         closed_ltf = df_ltf['close'].iloc[-2]
@@ -446,12 +451,14 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
                 elif closed_ltf <= ema50: status = "⏳ Wait Close>EMA50"
                 elif closed_ltf <= prev_high: status = "⏳ Wait High Breakout"
                 else: status = "👀 Ready (BUY)"
-            else:
+            elif trend_htf_down:
                 if ema50 >= ema200: status = f"⏳ Wait {ltf} EMA50<200 ({htf} Down)"
                 elif not (rsi_sell[0] < rsi_val < rsi_sell[1]): status = f"⏳ Wait RSI {rsi_sell[0]}-{rsi_sell[1]}"
                 elif closed_ltf >= ema50: status = "⏳ Wait Close<EMA50"
                 elif closed_ltf >= prev_low: status = "⏳ Wait Low Breakout"
                 else: status = "👀 Ready (SELL)"
+            else:
+                status = f"🔄 {htf} Trend Transition (Wait EMA50/200)"
 
         radar_rows.append({
             "🪙 Symbol": sym,
@@ -462,7 +469,7 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
             "Status": status
         })
 
-        # تخطي العملة لو مشغولة أو في فترة راحة أو وصلنا للحد الأقصى (2 صفقة)
+        # تخطي العملة لو مشغولة أو في فترة راحة أو وصلنا للحد الأقصى (4 صفقات)
         if sym in state['active_trades'] or open_count >= MAX_ACTIVE_TRADES:
             continue
         if sym in state['cooldowns'] and now_epoch < state['cooldowns'][sym]:
@@ -475,7 +482,7 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
         if sig_htf in ['BUY', 'SELL']:
             entry_side = sig_htf
             mode_label = config['htf_label']
-            tf_priority = 2  # أولوية أعلى لفريم الساعة
+            tf_priority = 2
             sig_adx = adx_htf
             raw_htf_atr = df_htf['ATR'].iloc[-2]
             eff_atr = float(raw_htf_atr) if (raw_htf_atr is not None and not pd.isna(raw_htf_atr) and raw_htf_atr > 0) else (current_price * 0.015)
@@ -507,36 +514,36 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
                 'rank_score': (tf_priority, sig_adx, SYMBOL_PRIORITY.get(sym, 0))
             })
 
-    # اختيار أقوى إشارة واحدة فقط في الدورة الحالية بشرط وجود مكان فاضي من الصفقتين
-    if candidates and open_count < MAX_ACTIVE_TRADES:
+    # ملء الأماكن المتاحة بأقوى الإشارات بالترتيب حتى الحد الأقصى (4 صفقات)
+    slots_available = MAX_ACTIVE_TRADES - open_count
+    if candidates and slots_available > 0:
         candidates.sort(key=lambda x: x['rank_score'], reverse=True)
-        best = candidates[0]
-        now_str = now_cairo().strftime('%Y-%m-%d %I:%M:%S %p')
-
-        state['active_trades'][best['sym']] = {
-            'entry': best['entry'],
-            'tp1': best['tp1'],
-            'tp2': best['tp2'],
-            'sl': best['sl'],
-            'original_sl': best['sl'],
-            'mode': best['mode'],
-            'side': best['side'],
-            'open_time': now_str,
-            'open_timestamp': time.time(),
-            'tp1_hit': False,
-            'tp2_hit': False,
-            'trade_closed': False,
-            'margin': margin,
-            'leverage': leverage
-        }
-        changed = True
+        for best in candidates[:slots_available]:
+            now_str = now_cairo().strftime('%Y-%m-%d %I:%M:%S %p')
+            state['active_trades'][best['sym']] = {
+                'entry': best['entry'],
+                'tp1': best['tp1'],
+                'tp2': best['tp2'],
+                'sl': best['sl'],
+                'original_sl': best['sl'],
+                'mode': best['mode'],
+                'side': best['side'],
+                'open_time': now_str,
+                'open_timestamp': time.time(),
+                'tp1_hit': False,
+                'tp2_hit': False,
+                'trade_closed': False,
+                'margin': margin,
+                'leverage': leverage
+            }
+            changed = True
 
     return radar_rows, changed
 
 def render_strategy_section(state, live_prices, radar_rows, cooldown_mins, default_margin, default_lev):
     st.markdown(f"### 🟢 Active Trades (Max: {MAX_ACTIVE_TRADES})")
     if not state['active_trades']:
-        st.info("No active trades right now. Scanning market for best signal...")
+        st.info("No active trades right now. Scanning market for confirmed signals...")
 
     for sym, trade in list(state['active_trades'].items()):
         live_price = live_prices.get(sym, trade['entry'])
@@ -667,7 +674,7 @@ def live_dashboard():
 
     st.markdown(
         f"<div style='padding:16px; margin-bottom:12px; border-radius:10px; background-color:#1e2129; color:#ffffff; border-left: 5px solid #3498db;'>"
-        f"<b style='color:#ffffff; font-size:16px;'>🐢 Classic Swing Portfolio ({swing_leverage}x | ${swing_margin:.2f}/trade — Best-Signal Filter)</b><br>"
+        f"<b style='color:#ffffff; font-size:16px;'>🐢 Classic Swing Portfolio ({swing_leverage}x | ${swing_margin:.2f}/trade — Max {MAX_ACTIVE_TRADES} Trades)</b><br>"
         f"<span style='font-size:28px; color:{s_color}; font-weight:bold;'>${bal:.2f}</span><br>"
         f"<span style='color:#e2e8f0; font-size:14px;'>Active: <b>{s_act}/{MAX_ACTIVE_TRADES}</b> | Closed: <b>{s_tot}</b> | Win Rate: <b style='color:#ffffff;'>{s_wr:.1f}%</b></span>"
         f"</div>",
