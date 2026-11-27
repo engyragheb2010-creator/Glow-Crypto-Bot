@@ -53,7 +53,8 @@ def get_default_strategy_state(start_balance=20.0):
 
 def get_default_data():
     return {
-        'swing': get_default_strategy_state(20.0)
+        'swing': get_default_strategy_state(20.0),
+        'last_updated': 0.0
     }
 
 def is_cloud_configured():
@@ -66,10 +67,12 @@ def normalize_data(raw_data):
     default = get_default_data()
     if not isinstance(raw_data, dict):
         return default
+    last_upd = float(raw_data.get('last_updated', 0.0) or 0.0)
     if 'swing' in raw_data and isinstance(raw_data['swing'], dict):
         for field, val in get_default_strategy_state().items():
             if field not in raw_data['swing']:
                 raw_data['swing'][field] = val
+        raw_data['last_updated'] = last_upd
         return raw_data
     if 'active_trades' in raw_data:
         default['swing'] = {
@@ -78,45 +81,101 @@ def normalize_data(raw_data):
             'cooldowns': raw_data.get('cooldowns', {}),
             'realized_pnl': raw_data.get('realized_pnl', 20.0)
         }
+        default['last_updated'] = last_upd
     return default
 
+def push_to_cloud(data):
+    if not is_cloud_configured():
+        return False, "Not configured"
+    try:
+        url = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
+        headers = {
+            "Content-Type": "application/json",
+            "X-Master-Key": JSONBIN_API_KEY
+        }
+        res = requests.put(url, json=data, headers=headers, timeout=15)
+        if res.status_code == 200:
+            st.session_state['last_cloud_sync'] = now_cairo().strftime('%I:%M:%S %p')
+            st.session_state['cloud_sync_error'] = None
+            return True, "OK"
+        else:
+            err_msg = f"HTTP {res.status_code}"
+            st.session_state['cloud_sync_error'] = err_msg
+            return False, err_msg
+    except Exception as e:
+        err_msg = str(e)
+        st.session_state['cloud_sync_error'] = err_msg
+        return False, err_msg
+
 def load_data():
+    local_data = None
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                local_data = normalize_data(json.load(f))
+        except Exception:
+            local_data = None
+
+    cloud_data = None
     if is_cloud_configured():
         try:
             url = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}/latest"
             headers = {"X-Master-Key": JSONBIN_API_KEY}
             res = requests.get(url, headers=headers, timeout=15)
             if res.status_code == 200:
-                return normalize_data(res.json().get("record", {}))
+                cloud_data = normalize_data(res.json().get("record", {}))
+                st.session_state['last_cloud_sync'] = now_cairo().strftime('%I:%M:%S %p')
+                st.session_state['cloud_sync_error'] = None
+            else:
+                st.session_state['cloud_sync_error'] = f"Load HTTP {res.status_code}"
         except Exception as e:
-            st.warning(f"Cloud load warning: {e}")
+            st.session_state['cloud_sync_error'] = str(e)
 
-    if os.path.exists(DATA_FILE):
+    # اختيار النسخة الأحدث زمنياً حتى لا تمسح السحابة صفقة محلية لم تُرفع بعد
+    if local_data and cloud_data:
+        local_ts = local_data.get('last_updated', 0.0)
+        cloud_ts = cloud_data.get('last_updated', 0.0)
+        if local_ts > cloud_ts:
+            push_to_cloud(local_data)
+            return local_data
+        else:
+            try:
+                with open(DATA_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(cloud_data, f, ensure_ascii=False, indent=4)
+            except Exception:
+                pass
+            return cloud_data
+    elif local_data:
+        push_to_cloud(local_data)
+        return local_data
+    elif cloud_data:
         try:
-            with open(DATA_FILE, 'r', encoding='utf-8') as f:
-                return normalize_data(json.load(f))
+            with open(DATA_FILE, 'w', encoding='utf-8') as f:
+                json.dump(cloud_data, f, ensure_ascii=False, indent=4)
         except Exception:
-            return get_default_data()
+            pass
+        return cloud_data
+
     return get_default_data()
 
 def save_data():
     data = st.session_state.bot_data
+    data['last_updated'] = time.time()
+
+    # الحفظ المحلي أولاً فوراً لضمان عدم ضياع أي صفقة
     try:
         with open(DATA_FILE, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=4)
     except Exception:
         pass
 
-    if is_cloud_configured():
-        try:
-            url = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}"
-            headers = {
-                "Content-Type": "application/json",
-                "X-Master-Key": JSONBIN_API_KEY
-            }
-            requests.put(url, json=data, headers=headers, timeout=15)
-        except Exception as e:
-            st.warning(f"Cloud save warning: {e}")
+    # ثم المزامنة مع السحابة
+    push_to_cloud(data)
+
+if 'last_cloud_sync' not in st.session_state:
+    st.session_state['last_cloud_sync'] = None
+if 'cloud_sync_error' not in st.session_state:
+    st.session_state['cloud_sync_error'] = None
 
 if 'data_loaded' not in st.session_state:
     st.session_state.bot_data = load_data()
@@ -277,9 +336,17 @@ def build_coin_stats(state):
 # ==========================================
 st.sidebar.markdown("### ⚙️ Classic Swing Settings")
 if is_cloud_configured():
-    st.sidebar.success("☁️ Cloud Memory: Connected")
+    if st.session_state.get('cloud_sync_error'):
+        st.sidebar.warning(f"⚠️ Cloud Sync Issue: {st.session_state['cloud_sync_error']} (Saved Locally)")
+    else:
+        sync_t = st.session_state.get('last_cloud_sync') or "Ready"
+        st.sidebar.success(f"☁️ Cloud Memory: Synced ({sync_t})")
 else:
     st.sidebar.warning("⚠️ Cloud Memory: Not Connected")
+
+if st.sidebar.button("☁️ Force Cloud Sync Now"):
+    save_data()
+    st.rerun()
 
 st.sidebar.caption(f"🤖 Fast 1H EMA20/50 + 6-Candle Breakout (Max {MAX_ACTIVE_TRADES} Trades)")
 st.sidebar.caption("💸 OKX Futures Fee: 0.10% (0.05% In + 0.05% Out)")
