@@ -148,6 +148,9 @@ def fetch_data_slow(symbol, timeframe, limit=250):
         atr_s = ta.atr(df['high'], df['low'], df['close'], length=14)
         df['ATR'] = atr_s if atr_s is not None and not atr_s.empty else 0.0
 
+        ema20_s = ta.ema(df['close'], length=20)
+        df['EMA20'] = ema20_s if ema20_s is not None and not ema20_s.empty else df['close']
+
         ema50_s = ta.ema(df['close'], length=50)
         df['EMA50'] = ema50_s if ema50_s is not None and not ema50_s.empty else df['close']
 
@@ -164,18 +167,22 @@ def fetch_data_slow(symbol, timeframe, limit=250):
     except Exception:
         return None
 
-def analyze_smc(df, adx_min=20.0, rsi_buy=(52, 62), rsi_sell=(38, 48), lookback=8):
+def check_auto_adx(adx_curr, adx_min=20.0):
+    return adx_curr >= adx_min
+
+def analyze_smc(df, adx_min=20.0, rsi_buy=(50, 65), rsi_sell=(35, 50)):
     if df is None or len(df) < 200:
         return 'NONE', 0.0, 0.0
 
     closed_candle = df['close'].iloc[-2]
-    # كسر أعلى قمة أو أدنى قاع لعدد (lookback) شموع سابقة لمنع الكسر الكاذب لشمعة واحدة
-    swing_high = df['high'].iloc[-(lookback + 2):-2].max()
-    swing_low = df['low'].iloc[-(lookback + 2):-2].min()
+    # كسر أعلى قمة أو أدنى قاع لآخر 6 شموع مغلقة لمنع الكسر الكاذب لشمعة واحدة
+    swing_high = df['high'].iloc[-8:-2].max()
+    swing_low = df['low'].iloc[-8:-2].min()
 
     raw_atr = df['ATR'].iloc[-2]
     atr_val = float(raw_atr) if (raw_atr is not None and not pd.isna(raw_atr)) else 0.0
 
+    ema_20 = df['EMA20'].iloc[-2]
     ema_50 = df['EMA50'].iloc[-2]
     ema_200 = df['EMA200'].iloc[-2]
     rsi = df['RSI'].iloc[-2]
@@ -183,13 +190,14 @@ def analyze_smc(df, adx_min=20.0, rsi_buy=(52, 62), rsi_sell=(38, 48), lookback=
     raw_adx = df['ADX'].iloc[-2]
     adx = float(raw_adx) if (raw_adx is not None and not pd.isna(raw_adx)) else 0.0
 
-    # منع الدخول تماماً في السوق العرضي (ADX < 20)
-    if adx < adx_min:
+    if not check_auto_adx(adx, adx_min):
         return 'NONE', 0.0, adx
 
-    if ema_50 > ema_200 and closed_candle > ema_50 and closed_candle > swing_high and rsi_buy[0] < rsi < rsi_buy[1]:
+    if (ema_20 > ema_50 and closed_candle > ema_200 and closed_candle > ema_50
+            and closed_candle > swing_high and rsi_buy[0] < rsi < rsi_buy[1]):
         return 'BUY', atr_val, adx
-    elif ema_50 < ema_200 and closed_candle < ema_50 and closed_candle < swing_low and rsi_sell[0] < rsi < rsi_sell[1]:
+    elif (ema_20 < ema_50 and closed_candle < ema_200 and closed_candle < ema_50
+          and closed_candle < swing_low and rsi_sell[0] < rsi < rsi_sell[1]):
         return 'SELL', atr_val, adx
 
     return 'NONE', 0.0, adx
@@ -273,7 +281,7 @@ if is_cloud_configured():
 else:
     st.sidebar.warning("⚠️ Cloud Memory: Not Connected")
 
-st.sidebar.caption(f"🛡️ Anti-Chop Filter: ADX ≥ 20 + 8-Candle Breakout (Max {MAX_ACTIVE_TRADES})")
+st.sidebar.caption(f"🤖 Fast 1H EMA20/50 + 6-Candle Breakout (Max {MAX_ACTIVE_TRADES} Trades)")
 st.sidebar.caption("💸 OKX Futures Fee: 0.10% (0.05% In + 0.05% Out)")
 
 swing_margin = st.sidebar.number_input("Margin / Trade ($):", min_value=1.0, value=5.0, step=0.5)
@@ -290,7 +298,7 @@ if st.sidebar.button("🔄 Reset Classic Swing"):
     st.rerun()
 
 # ==========================================
-# 6. محرك التحديث والرادار (مع فلاتر منع التذبذب)
+# 6. محرك التحديث والرادار
 # ==========================================
 def update_active_trades(state, live_prices, cooldown_mins, default_margin, default_lev):
     changed = False
@@ -397,8 +405,8 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
             continue
 
         current_price = df_ltf['close'].iloc[-1]
-        sig_htf, _, adx_htf = analyze_smc(df_htf, adx_min=adx_min, rsi_buy=rsi_buy, rsi_sell=rsi_sell, lookback=6)
-        sig_ltf, _, _ = analyze_smc(df_ltf, adx_min=adx_min, rsi_buy=rsi_buy, rsi_sell=rsi_sell, lookback=8)
+        sig_htf, _, adx_htf = analyze_smc(df_htf, adx_min=adx_min, rsi_buy=rsi_buy, rsi_sell=rsi_sell)
+        sig_ltf, _, _ = analyze_smc(df_ltf, adx_min=adx_min, rsi_buy=rsi_buy, rsi_sell=rsi_sell)
         vol_ltf = df_ltf['volume'].iloc[-1]
 
         raw_atr = df_ltf['ATR'].iloc[-2]
@@ -413,18 +421,20 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
         raw_rsi = df_ltf['RSI'].iloc[-2]
         rsi_val = float(raw_rsi) if (raw_rsi is not None and not pd.isna(raw_rsi)) else 50.0
 
-        # تأكيد ترتيب متوسطات فريم الساعة (EMA50 مع EMA200)
+        # فلتر الساعة السريع: EMA20 مع EMA50 + موقع السعر من EMA200
         htf_close = df_htf['close'].iloc[-2]
+        htf_ema20 = df_htf['EMA20'].iloc[-2]
         htf_ema50 = df_htf['EMA50'].iloc[-2]
         htf_ema200 = df_htf['EMA200'].iloc[-2]
-        trend_htf_up = (htf_ema50 > htf_ema200) and (htf_close > htf_ema50)
-        trend_htf_down = (htf_ema50 < htf_ema200) and (htf_close < htf_ema50)
+        trend_htf_up = (htf_ema20 > htf_ema50) and (htf_close > htf_ema200)
+        trend_htf_down = (htf_ema20 < htf_ema50) and (htf_close < htf_ema200)
 
+        ema20 = df_ltf['EMA20'].iloc[-2]
         ema50 = df_ltf['EMA50'].iloc[-2]
         ema200 = df_ltf['EMA200'].iloc[-2]
         closed_ltf = df_ltf['close'].iloc[-2]
-        swing_high_ltf = df_ltf['high'].iloc[-10:-2].max()
-        swing_low_ltf = df_ltf['low'].iloc[-10:-2].min()
+        swing_high_ltf = df_ltf['high'].iloc[-8:-2].max()
+        swing_low_ltf = df_ltf['low'].iloc[-8:-2].min()
 
         if sym in state['active_trades']:
             t_obj = state['active_trades'][sym]
@@ -438,23 +448,23 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
             status = f"🛌 Resting ({rem}m left)"
         elif open_count >= MAX_ACTIVE_TRADES:
             status = f"⏸️ Max Trades ({open_count}/{MAX_ACTIVE_TRADES})"
-        elif adx_val < adx_min:
-            status = f"😴 Choppy/Flat Market (ADX {adx_val:.1f} < {adx_min:.0f})"
+        elif not check_auto_adx(adx_val, adx_min):
+            status = f"😴 Choppy/Flat Market (ADX {adx_val:.1f} < {int(adx_min)})"
         else:
             if trend_htf_up:
-                if ema50 <= ema200: status = f"⏳ Wait {ltf} EMA50>200 ({htf} Up)"
-                elif not (rsi_buy[0] < rsi_val < rsi_buy[1]): status = f"⏳ Wait RSI {rsi_buy[0]}-{rsi_buy[1]} ({rsi_val:.1f})"
+                if ema20 <= ema50 or closed_ltf <= ema200: status = f"⏳ Wait {ltf} EMA20>50 ({htf} Up)"
+                elif not (rsi_buy[0] < rsi_val < rsi_buy[1]): status = f"⏳ Wait RSI {rsi_buy[0]}-{rsi_buy[1]}"
                 elif closed_ltf <= ema50: status = "⏳ Wait Close>EMA50"
-                elif closed_ltf <= swing_high_ltf: status = "⏳ Wait 2h High Breakout"
+                elif closed_ltf <= swing_high_ltf: status = "⏳ Wait 6-Candle Breakout"
                 else: status = "👀 Ready (BUY)"
             elif trend_htf_down:
-                if ema50 >= ema200: status = f"⏳ Wait {ltf} EMA50<200 ({htf} Down)"
-                elif not (rsi_sell[0] < rsi_val < rsi_sell[1]): status = f"⏳ Wait RSI {rsi_sell[0]}-{rsi_sell[1]} ({rsi_val:.1f})"
+                if ema20 >= ema50 or closed_ltf >= ema200: status = f"⏳ Wait {ltf} EMA20<50 ({htf} Down)"
+                elif not (rsi_sell[0] < rsi_val < rsi_sell[1]): status = f"⏳ Wait RSI {rsi_sell[0]}-{rsi_sell[1]}"
                 elif closed_ltf >= ema50: status = "⏳ Wait Close<EMA50"
-                elif closed_ltf >= swing_low_ltf: status = "⏳ Wait 2h Low Breakout"
+                elif closed_ltf >= swing_low_ltf: status = "⏳ Wait 6-Candle Breakdown"
                 else: status = "👀 Ready (SELL)"
             else:
-                status = f"🔄 {htf} Trend Transition (Wait EMA50/200)"
+                status = f"🔄 {htf} Trend Transition (Wait EMA20/50 & 200)"
 
         radar_rows.append({
             "🪙 Symbol": sym,
@@ -539,7 +549,7 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
 def render_strategy_section(state, live_prices, radar_rows, cooldown_mins, default_margin, default_lev):
     st.markdown(f"### 🟢 Active Trades (Max: {MAX_ACTIVE_TRADES})")
     if not state['active_trades']:
-        st.info("No active trades right now. Waiting for strong trend breakout (ADX ≥ 20)...")
+        st.info("No active trades right now. Scanning market for confirmed signals...")
 
     for sym, trade in list(state['active_trades'].items()):
         live_price = live_prices.get(sym, trade['entry'])
@@ -627,7 +637,7 @@ def render_strategy_section(state, live_prices, radar_rows, cooldown_mins, defau
 CLASSIC_SWING_CONFIG = {
     'htf': '1h', 'ltf': '15m',
     'adx_min': 20.0,
-    'rsi_buy': (52, 62), 'rsi_sell': (38, 48),
+    'rsi_buy': (50, 65), 'rsi_sell': (35, 50),
     'tp1_mult': 1.8, 'tp2_mult': 3.5, 'sl_mult': 1.8, 'min_tp': 0.015,
     'htf_tp1': 2.0, 'htf_tp2': 4.0, 'htf_sl': 2.0, 'htf_min_tp': 0.02,
     'htf_label': "🎯 Pro Swing (1h)", 'ltf_label': "🐢 Classic Swing (15m)",
