@@ -224,26 +224,21 @@ def fetch_data_slow(symbol, timeframe, limit=250):
     except Exception:
         return None
 
-def check_auto_adx(adx_curr, adx_min=19.0):
+def check_auto_adx(adx_curr, adx_min=17.0):
     return adx_curr >= adx_min
 
-def analyze_smc(df, adx_min=19.0, rsi_buy=(45, 65), rsi_sell=(35, 55)):
+def analyze_smc(df, adx_min=17.0, rsi_buy=(45, 65), rsi_sell=(35, 55)):
     if df is None or len(df) < 200:
         return 'NONE', 0.0, 0.0
 
     closed_candle = df['close'].iloc[-2]
     open_candle = df['open'].iloc[-2]
     prev_close = df['close'].iloc[-3]
-    low_curr = df['low'].iloc[-2]
-    low_prev = df['low'].iloc[-3]
-    high_curr = df['high'].iloc[-2]
-    high_prev = df['high'].iloc[-3]
 
     raw_atr = df['ATR'].iloc[-2]
     atr_val = float(raw_atr) if (raw_atr is not None and not pd.isna(raw_atr)) else 0.0
 
     ema_20 = df['EMA20'].iloc[-2]
-    ema_20_prev = df['EMA20'].iloc[-3]
     ema_50 = df['EMA50'].iloc[-2]
     ema_200 = df['EMA200'].iloc[-2]
     rsi = df['RSI'].iloc[-2]
@@ -254,20 +249,26 @@ def analyze_smc(df, adx_min=19.0, rsi_buy=(45, 65), rsi_sell=(35, 55)):
     if not check_auto_adx(adx, adx_min):
         return 'NONE', 0.0, adx
 
-    # شراء عند الارتداد من EMA20 في ترند صاعد (Pullback Bounce) بدل مطاردة القمم
-    touched_ema20_up = (low_curr <= ema_20 * 1.003) or (low_prev <= ema_20_prev * 1.003)
+    # شراء عند الارتداد من EMA20 أو EMA50 خلال آخر 3 شموع مغلقة في ترند صاعد
+    touched_ema_up = bool(
+        (df['low'].iloc[-4:-1] <= df['EMA20'].iloc[-4:-1] * 1.003).any()
+        or (df['low'].iloc[-4:-1] <= df['EMA50'].iloc[-4:-1] * 1.003).any()
+    )
     bullish_bounce = (closed_candle > ema_20) and (closed_candle > open_candle) and (closed_candle > prev_close)
 
     if (ema_20 > ema_50 and closed_candle > ema_200 and closed_candle > ema_50
-            and touched_ema20_up and bullish_bounce and rsi_buy[0] < rsi < rsi_buy[1]):
+            and touched_ema_up and bullish_bounce and rsi_buy[0] < rsi < rsi_buy[1]):
         return 'BUY', atr_val, adx
 
-    # بيع عند الارتداد من EMA20 في ترند هابط (Pullback Rejection) بدل البيع في القاع
-    touched_ema20_down = (high_curr >= ema_20 * 0.997) or (high_prev >= ema_20_prev * 0.997)
+    # بيع عند الارتداد من EMA20 أو EMA50 خلال آخر 3 شموع مغلقة في ترند هابط
+    touched_ema_down = bool(
+        (df['high'].iloc[-4:-1] >= df['EMA20'].iloc[-4:-1] * 0.997).any()
+        or (df['high'].iloc[-4:-1] >= df['EMA50'].iloc[-4:-1] * 0.997).any()
+    )
     bearish_bounce = (closed_candle < ema_20) and (closed_candle < open_candle) and (closed_candle < prev_close)
 
     if (ema_20 < ema_50 and closed_candle < ema_200 and closed_candle < ema_50
-            and touched_ema20_down and bearish_bounce and rsi_sell[0] < rsi < rsi_sell[1]):
+            and touched_ema_down and bearish_bounce and rsi_sell[0] < rsi < rsi_sell[1]):
         return 'SELL', atr_val, adx
 
     return 'NONE', 0.0, adx
@@ -359,7 +360,7 @@ if st.sidebar.button("☁️ Force Cloud Sync Now"):
     save_data()
     st.rerun()
 
-st.sidebar.caption(f"🤖 EMA20 Pullback Bounce + 2.2% Wide SL (Max {MAX_ACTIVE_TRADES} Trades)")
+st.sidebar.caption(f"🤖 EMA20/50 Pullback Bounce + 2.2% Wide SL (Max {MAX_ACTIVE_TRADES} Trades)")
 st.sidebar.caption("💸 OKX Futures Fee: 0.10% (0.05% In + 0.05% Out)")
 
 swing_margin = st.sidebar.number_input("Margin / Trade ($):", min_value=1.0, value=3.5, step=0.5)
@@ -508,20 +509,22 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
         trend_htf_down = (htf_ema20 < htf_ema50) and (htf_close < htf_ema200)
 
         ema20 = df_ltf['EMA20'].iloc[-2]
-        ema20_prev = df_ltf['EMA20'].iloc[-3]
         ema50 = df_ltf['EMA50'].iloc[-2]
         ema200 = df_ltf['EMA200'].iloc[-2]
         closed_ltf = df_ltf['close'].iloc[-2]
         open_ltf = df_ltf['open'].iloc[-2]
         prev_close_ltf = df_ltf['close'].iloc[-3]
-        low_curr = df_ltf['low'].iloc[-2]
-        low_prev = df_ltf['low'].iloc[-3]
-        high_curr = df_ltf['high'].iloc[-2]
-        high_prev = df_ltf['high'].iloc[-3]
 
-        touched_ema20_up = (low_curr <= ema20 * 1.003) or (low_prev <= ema20_prev * 1.003)
+        touched_ema_up = bool(
+            (df_ltf['low'].iloc[-4:-1] <= df_ltf['EMA20'].iloc[-4:-1] * 1.003).any()
+            or (df_ltf['low'].iloc[-4:-1] <= df_ltf['EMA50'].iloc[-4:-1] * 1.003).any()
+        )
         bullish_bounce = (closed_ltf > ema20) and (closed_ltf > open_ltf) and (closed_ltf > prev_close_ltf)
-        touched_ema20_down = (high_curr >= ema20 * 0.997) or (high_prev >= ema20_prev * 0.997)
+
+        touched_ema_down = bool(
+            (df_ltf['high'].iloc[-4:-1] >= df_ltf['EMA20'].iloc[-4:-1] * 0.997).any()
+            or (df_ltf['high'].iloc[-4:-1] >= df_ltf['EMA50'].iloc[-4:-1] * 0.997).any()
+        )
         bearish_bounce = (closed_ltf < ema20) and (closed_ltf < open_ltf) and (closed_ltf < prev_close_ltf)
 
         if sym in state['active_trades']:
@@ -544,8 +547,8 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
                     status = f"⏳ Wait {ltf} EMA Align ({htf} Up)"
                 elif not (rsi_buy[0] < rsi_val < rsi_buy[1]):
                     status = f"⏳ Wait RSI {rsi_buy[0]}-{rsi_buy[1]}"
-                elif not touched_ema20_up:
-                    status = "⏳ Wait Pullback to EMA20"
+                elif not touched_ema_up:
+                    status = "⏳ Wait Pullback to EMA20/50"
                 elif not bullish_bounce:
                     status = "⏳ Wait Green Bounce Candle"
                 else:
@@ -555,8 +558,8 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
                     status = f"⏳ Wait {ltf} EMA Align ({htf} Down)"
                 elif not (rsi_sell[0] < rsi_val < rsi_sell[1]):
                     status = f"⏳ Wait RSI {rsi_sell[0]}-{rsi_sell[1]}"
-                elif not touched_ema20_down:
-                    status = "⏳ Wait Pullback to EMA20"
+                elif not touched_ema_down:
+                    status = "⏳ Wait Pullback to EMA20/50"
                 elif not bearish_bounce:
                     status = "⏳ Wait Red Bounce Candle"
                 else:
@@ -736,7 +739,7 @@ def render_strategy_section(state, live_prices, radar_rows, cooldown_mins, defau
 # ==========================================
 CLASSIC_SWING_CONFIG = {
     'htf': '1h', 'ltf': '15m',
-    'adx_min': 19.0,
+    'adx_min': 17.0,
     'rsi_buy': (45, 65), 'rsi_sell': (35, 55),
     'tp1_mult': 2.2, 'tp2_mult': 4.2, 'sl_mult': 2.4,
     'min_tp': 0.022, 'min_sl': 0.022,
