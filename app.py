@@ -167,10 +167,10 @@ def fetch_data_slow(symbol, timeframe, limit=250):
     except Exception:
         return None
 
-def check_auto_adx(adx_curr, adx_min=20.0):
+def check_auto_adx(adx_curr, adx_min=19.0):
     return adx_curr >= adx_min
 
-def analyze_smc(df, adx_min=20.0, rsi_buy=(50, 65), rsi_sell=(35, 50)):
+def analyze_smc(df, adx_min=19.0, rsi_buy=(48, 70), rsi_sell=(30, 52)):
     if df is None or len(df) < 200:
         return 'NONE', 0.0, 0.0
 
@@ -636,8 +636,8 @@ def render_strategy_section(state, live_prices, radar_rows, cooldown_mins, defau
 # ==========================================
 CLASSIC_SWING_CONFIG = {
     'htf': '1h', 'ltf': '15m',
-    'adx_min': 20.0,
-    'rsi_buy': (50, 65), 'rsi_sell': (35, 50),
+    'adx_min': 19.0,
+    'rsi_buy': (48, 70), 'rsi_sell': (30, 52),
     'tp1_mult': 1.8, 'tp2_mult': 3.5, 'sl_mult': 1.8, 'min_tp': 0.015,
     'htf_tp1': 2.0, 'htf_tp2': 4.0, 'htf_sl': 2.0, 'htf_min_tp': 0.02,
     'htf_label': "🎯 Pro Swing (1h)", 'ltf_label': "🐢 Classic Swing (15m)",
