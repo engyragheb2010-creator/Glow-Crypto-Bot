@@ -162,14 +162,12 @@ def save_data():
     data = st.session_state.bot_data
     data['last_updated'] = time.time()
 
-    # الحفظ المحلي أولاً فوراً لضمان عدم ضياع أي صفقة
     try:
         with open(DATA_FILE, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=4)
     except Exception:
         pass
 
-    # ثم المزامنة مع السحابة
     push_to_cloud(data)
 
 if 'last_cloud_sync' not in st.session_state:
@@ -234,9 +232,9 @@ def analyze_smc(df, adx_min=19.0, rsi_buy=(48, 70), rsi_sell=(30, 52)):
         return 'NONE', 0.0, 0.0
 
     closed_candle = df['close'].iloc[-2]
-    # كسر أعلى قمة أو أدنى قاع لآخر 6 شموع مغلقة لمنع الكسر الكاذب لشمعة واحدة
-    swing_high = df['high'].iloc[-8:-2].max()
-    swing_low = df['low'].iloc[-8:-2].min()
+    # كسر أعلى قمة أو أدنى قاع لآخر 3 شموع مغلقة (45 دقيقة) لمنع الكسر الكاذب لشمعة واحدة بدون تأخير
+    swing_high = df['high'].iloc[-5:-2].max()
+    swing_low = df['low'].iloc[-5:-2].min()
 
     raw_atr = df['ATR'].iloc[-2]
     atr_val = float(raw_atr) if (raw_atr is not None and not pd.isna(raw_atr)) else 0.0
@@ -348,7 +346,7 @@ if st.sidebar.button("☁️ Force Cloud Sync Now"):
     save_data()
     st.rerun()
 
-st.sidebar.caption(f"🤖 Fast 1H EMA20/50 + 6-Candle Breakout (Max {MAX_ACTIVE_TRADES} Trades)")
+st.sidebar.caption(f"🤖 Fast 1H EMA20/50 + 3-Candle Breakout (Max {MAX_ACTIVE_TRADES} Trades)")
 st.sidebar.caption("💸 OKX Futures Fee: 0.10% (0.05% In + 0.05% Out)")
 
 swing_margin = st.sidebar.number_input("Margin / Trade ($):", min_value=1.0, value=5.0, step=0.5)
@@ -500,8 +498,8 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
         ema50 = df_ltf['EMA50'].iloc[-2]
         ema200 = df_ltf['EMA200'].iloc[-2]
         closed_ltf = df_ltf['close'].iloc[-2]
-        swing_high_ltf = df_ltf['high'].iloc[-8:-2].max()
-        swing_low_ltf = df_ltf['low'].iloc[-8:-2].min()
+        swing_high_ltf = df_ltf['high'].iloc[-5:-2].max()
+        swing_low_ltf = df_ltf['low'].iloc[-5:-2].min()
 
         if sym in state['active_trades']:
             t_obj = state['active_trades'][sym]
@@ -522,13 +520,13 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
                 if ema20 <= ema50 or closed_ltf <= ema200: status = f"⏳ Wait {ltf} EMA20>50 ({htf} Up)"
                 elif not (rsi_buy[0] < rsi_val < rsi_buy[1]): status = f"⏳ Wait RSI {rsi_buy[0]}-{rsi_buy[1]}"
                 elif closed_ltf <= ema50: status = "⏳ Wait Close>EMA50"
-                elif closed_ltf <= swing_high_ltf: status = "⏳ Wait 6-Candle Breakout"
+                elif closed_ltf <= swing_high_ltf: status = "⏳ Wait 3-Candle Breakout"
                 else: status = "👀 Ready (BUY)"
             elif trend_htf_down:
                 if ema20 >= ema50 or closed_ltf >= ema200: status = f"⏳ Wait {ltf} EMA20<50 ({htf} Down)"
                 elif not (rsi_sell[0] < rsi_val < rsi_sell[1]): status = f"⏳ Wait RSI {rsi_sell[0]}-{rsi_sell[1]}"
                 elif closed_ltf >= ema50: status = "⏳ Wait Close<EMA50"
-                elif closed_ltf >= swing_low_ltf: status = "⏳ Wait 6-Candle Breakdown"
+                elif closed_ltf >= swing_low_ltf: status = "⏳ Wait 3-Candle Breakdown"
                 else: status = "👀 Ready (SELL)"
             else:
                 status = f"🔄 {htf} Trend Transition (Wait EMA20/50 & 200)"
