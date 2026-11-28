@@ -39,7 +39,6 @@ SYMBOL_PRIORITY = {
     'BNB/USDT': 2,
     'XRP/USDT': 1
 }
-MAX_ACTIVE_TRADES = 4
 DATA_FILE = 'trades_data_dual.json'
 OKX_ROUND_TRIP_FEE = 0.001  # 0.05% دخول + 0.05% خروج (Taker Fee على OKX Futures)
 
@@ -343,7 +342,7 @@ if st.sidebar.button("☁️ Force Cloud Sync Now"):
     save_data()
     st.rerun()
 
-st.sidebar.caption(f"🤖 Original Direct Momentum 1H/15M (Max {MAX_ACTIVE_TRADES} Trades)")
+st.sidebar.caption("🤖 Original Direct Momentum 1H/15M (All 6 Coins Active)")
 st.sidebar.caption("💸 OKX Futures Fee: 0.10% (0.05% In + 0.05% Out)")
 
 swing_margin = st.sidebar.number_input("Margin / Trade ($):", min_value=1.0, value=5.0, step=0.5)
@@ -458,7 +457,6 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
     htf, ltf = config['htf'], config['ltf']
     adx_min = config['adx_min']
     rsi_buy, rsi_sell = config['rsi_buy'], config['rsi_sell']
-    open_count = sum(1 for t in state['active_trades'].values() if not t.get('trade_closed', False))
 
     for sym in SYMBOLS:
         df_htf = dfs_cache.get((sym, htf))
@@ -506,8 +504,6 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
         elif sym in state['cooldowns'] and now_epoch < state['cooldowns'][sym]:
             rem = int((state['cooldowns'][sym] - now_epoch) // 60)
             status = f"🛌 Resting ({rem}m left)"
-        elif open_count >= MAX_ACTIVE_TRADES:
-            status = f"⏸️ Max Trades ({open_count}/{MAX_ACTIVE_TRADES})"
         elif not check_auto_adx(adx_val, adx_min):
             status = f"😴 Choppy/Flat Market (ADX {adx_val:.1f} < {int(adx_min)})"
         else:
@@ -537,8 +533,8 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
             "Status": status
         })
 
-        # تخطي العملة لو مشغولة أو في فترة راحة أو وصلنا للحد الأقصى (4 صفقات)
-        if sym in state['active_trades'] or open_count >= MAX_ACTIVE_TRADES:
+        # تخطي العملة لو مشغولة أو في فترة راحة فقط (بدون حد أقصى لعدد الصفقات)
+        if sym in state['active_trades']:
             continue
         if sym in state['cooldowns'] and now_epoch < state['cooldowns'][sym]:
             continue
@@ -590,11 +586,10 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
                 'rank_score': (tf_priority, sig_adx, SYMBOL_PRIORITY.get(sym, 0))
             })
 
-    # ملء الأماكن المتاحة بأقوى الإشارات بالترتيب حتى الحد الأقصى (4 صفقات)
-    slots_available = MAX_ACTIVE_TRADES - open_count
-    if candidates and slots_available > 0:
+    # فتح الصفقات لكل العملات الجاهزة بالترتيب بدون حد أقصى
+    if candidates:
         candidates.sort(key=lambda x: x['rank_score'], reverse=True)
-        for best in candidates[:slots_available]:
+        for best in candidates:
             now_str = now_cairo().strftime('%Y-%m-%d %I:%M:%S %p')
             state['active_trades'][best['sym']] = {
                 'entry': best['entry'],
@@ -617,7 +612,7 @@ def scan_swing_mode(state, config, dfs_cache, margin, leverage):
     return radar_rows, changed
 
 def render_strategy_section(state, live_prices, radar_rows, cooldown_mins, default_margin, default_lev):
-    st.markdown(f"### 🟢 Active Trades (Max: {MAX_ACTIVE_TRADES})")
+    st.markdown("### 🟢 Active Trades")
     if not state['active_trades']:
         st.info("No active trades right now. Scanning market for confirmed signals...")
 
@@ -754,9 +749,9 @@ def live_dashboard():
 
     st.markdown(
         f"<div style='padding:16px; margin-bottom:12px; border-radius:10px; background-color:#1e2129; color:#ffffff; border-left: 5px solid #3498db;'>"
-        f"<b style='color:#ffffff; font-size:16px;'>🐢 Classic Swing Portfolio ({swing_leverage}x | ${swing_margin:.2f}/trade — Max {MAX_ACTIVE_TRADES} Trades)</b><br>"
+        f"<b style='color:#ffffff; font-size:16px;'>🐢 Classic Swing Portfolio ({swing_leverage}x | ${swing_margin:.2f}/trade)</b><br>"
         f"<span style='font-size:28px; color:{s_color}; font-weight:bold;'>${bal:.2f}</span><br>"
-        f"<span style='color:#e2e8f0; font-size:14px;'>Active: <b>{s_act}/{MAX_ACTIVE_TRADES}</b> | Closed: <b>{s_tot}</b> | Win Rate: <b style='color:#ffffff;'>{s_wr:.1f}%</b></span>"
+        f"<span style='color:#e2e8f0; font-size:14px;'>Active: <b>{s_act}/{len(SYMBOLS)}</b> | Closed: <b>{s_tot}</b> | Win Rate: <b style='color:#ffffff;'>{s_wr:.1f}%</b></span>"
         f"</div>",
         unsafe_allow_html=True
     )
